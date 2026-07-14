@@ -1,71 +1,71 @@
-# Ejemplos de API
+# API examples
 
-Base: `https://tu-servicio.onrender.com`. Autenticación: `Authorization: Bearer <access_token>`. OpenAPI interactivo en `/docs`.
+Base: `https://your-service.onrender.com`. Authentication: `Authorization: Bearer <access_token>`. Interactive OpenAPI at `/docs`.
 
-## Autenticación
+## Authentication
 
 ```bash
-# Login
+# Log in
 curl -s $BASE/api/v1/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"admin@example.com","password":"..."}'
 # → {"access_token":"...","refresh_token":"...","token_type":"bearer"}
 
-# Renovar tokens
+# Refresh tokens
 curl -s $BASE/api/v1/auth/refresh -H 'Content-Type: application/json' \
   -d '{"refresh_token":"..."}'
 
-# Usuario actual
+# Current user
 curl -s $BASE/api/v1/auth/me -H "Authorization: Bearer $TOKEN"
 ```
 
-## Usuarios (admin)
+## Users (admin)
 
 ```bash
-# Crear usuario con rol
+# Create a user with a role
 curl -s $BASE/api/v1/users -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"email":"dev@example.com","password":"Password123!","role":"manager"}'
 
-# Cambiar rol / desactivar
+# Change role / deactivate
 curl -s -X PATCH $BASE/api/v1/users/$USER_ID -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"role":"viewer","is_active":false}'
 ```
 
-## API Keys
+## API keys
 
 ```bash
-# Registrar una key (creada previamente en build.nvidia.com/settings/api-keys)
-# validate_remote=true la comprueba contra NVIDIA antes de aceptarla
+# Register a key (previously created at build.nvidia.com/settings/api-keys)
+# validate_remote=true checks it against NVIDIA before accepting it
 curl -s $BASE/api/v1/keys -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"prod-1","api_key":"nvapi-...","validate_remote":true,"expires_at":"2026-12-31T23:59:59Z"}'
 
-# Listar (nunca devuelve la key en claro; filtros: ?status=active&project_id=...)
+# List (never returns the plaintext key; filters: ?status=active&project_id=...)
 curl -s $BASE/api/v1/keys -H "Authorization: Bearer $TOKEN"
 
-# Validar bajo demanda contra NVIDIA
+# Validate on demand against NVIDIA
 curl -s -X POST $BASE/api/v1/keys/$KEY_ID/validate -H "Authorization: Bearer $TOKEN"
 
-# Rotar (pega la key NUEVA; la antigua queda revocada y enlazada)
+# Rotate (paste the NEW key; the old one is revoked and linked)
 curl -s -X POST $BASE/api/v1/keys/$KEY_ID/rotate -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"api_key":"nvapi-NUEVA..."}'
+  -H 'Content-Type: application/json' -d '{"api_key":"nvapi-NEW..."}'
 
-# Revocar / eliminar (eliminar requiere admin)
+# Revoke / delete (delete requires admin)
 curl -s -X POST $BASE/api/v1/keys/$KEY_ID/revoke -H "Authorization: Bearer $TOKEN"
 curl -s -X DELETE $BASE/api/v1/keys/$KEY_ID -H "Authorization: Bearer $TOKEN"
 
-# Comprobación de expiraciones bajo demanda
+# On-demand expiry check
 curl -s -X POST $BASE/api/v1/keys/maintenance/expiry-check -H "Authorization: Bearer $TOKEN"
 ```
 
-## Dispensación (integración con tus aplicaciones)
+## Dispensing (integrate with your apps)
 
 ```bash
-# Key activa menos usada, global o por proyecto
+# Least-recently-used active key, globally or per project
 curl -s "$BASE/api/v1/keys/dispense" -H "Authorization: Bearer $TOKEN"
 curl -s "$BASE/api/v1/keys/dispense?project_id=$PROJECT_ID" -H "Authorization: Bearer $TOKEN"
 # → {"key_id":"...","name":"prod-1","key_hint":"…f3a2","project_id":null,"api_key":"nvapi-..."}
 ```
 
-Ejemplo de consumo desde Python:
+Consuming it from Python:
 
 ```python
 import httpx
@@ -82,18 +82,27 @@ nvidia_key = resp.json()["api_key"]
 client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=nvidia_key)
 ```
 
-## Proyectos
+## Projects
 
 ```bash
 curl -s $BASE/api/v1/projects -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"chatbot","description":"Bot de soporte"}'
+  -d '{"name":"chatbot","description":"Support bot"}'
 curl -s -X POST $BASE/api/v1/projects/$PROJECT_ID/keys/$KEY_ID -H "Authorization: Bearer $TOKEN"
 ```
 
-## Estadísticas y auditoría
+## Stats and audit
 
 ```bash
 curl -s $BASE/api/v1/stats/overview -H "Authorization: Bearer $TOKEN"
 curl -s "$BASE/api/v1/stats/usage?days=30" -H "Authorization: Bearer $TOKEN"
 curl -s "$BASE/api/v1/audit?limit=50&action=key.dispensed" -H "Authorization: Bearer $TOKEN"  # admin
 ```
+
+## Claude connector (MCP)
+
+Prefer natural language through Claude once the connector is added (see [`connector.md`](connector.md)). Example prompts:
+
+- "Dispense an available NVIDIA key for the `chatbot` project."
+- "Which of my keys expire in the next 7 days?"
+- "Register this key and attach it to project `chatbot`: `nvapi-...`"
+- "Rotate key `‹id›` with this new one: `nvapi-...`"

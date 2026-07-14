@@ -1,50 +1,54 @@
-# Arquitectura
+# Architecture
 
-## Visión general
+## Overview
 
-NIM Key Manager sigue **Clean Architecture pragmática** con cuatro capas y dependencias apuntando hacia dentro:
+NIM Key Manager follows **pragmatic Clean Architecture** with four layers and dependencies pointing inward:
 
 ```
-        ┌─────────────────────────────────────────┐
-        │ api/ (FastAPI) · dashboard/ · tasks/    │  ← Interfaz / entrega
-        ├─────────────────────────────────────────┤
-        │ application/services + interfaces       │  ← Casos de uso y puertos
-        ├─────────────────────────────────────────┤
-        │ domain/ (enums, excepciones)             │  ← Reglas y vocabulario
-        ├─────────────────────────────────────────┤
-        │ infrastructure/ (SQLAlchemy, NVIDIA)     │  ← Adaptadores
-        └─────────────────────────────────────────┘
+        ┌──────────────────────────────────────────────┐
+        │ api/ (FastAPI) · mcp/ · dashboard/ · tasks/  │  ← Interface / delivery
+        ├──────────────────────────────────────────────┤
+        │ application/services + interfaces            │  ← Use cases and ports
+        ├──────────────────────────────────────────────┤
+        │ domain/ (enums, exceptions)                  │  ← Rules and vocabulary
+        ├──────────────────────────────────────────────┤
+        │ infrastructure/ (SQLAlchemy, NVIDIA)         │  ← Adapters
+        └──────────────────────────────────────────────┘
 ```
 
-- **domain**: vocabulario del negocio (roles, estados de key, acciones de auditoría) y excepciones. Sin dependencias externas.
-- **application**: los casos de uso (`KeyService`, `AuthService`, `ProjectService`, `UserService`, `StatsService`, `AuditService`). Acceden a la persistencia a través de repositorios y a NVIDIA a través del puerto `KeyValidator` (Protocol), lo que permite sustituirlo por un fake en tests.
-- **infrastructure**: adaptadores concretos — repositorios SQLAlchemy 2 async y `NvidiaKeyValidator` (httpx).
-- **api**: FastAPI traduce HTTP ⇄ casos de uso. Las excepciones de dominio se mapean a códigos HTTP en un único lugar (`main.py`), por lo que los routers no contienen manejo de errores.
+- **domain**: business vocabulary (roles, key statuses, audit actions) and exceptions. No external dependencies.
+- **application**: the use cases (`KeyService`, `AuthService`, `ProjectService`, `UserService`, `StatsService`, `AuditService`). They reach persistence through repositories and NVIDIA through the `KeyValidator` port (a `Protocol`), which makes it trivial to swap in a fake in tests.
+- **infrastructure**: concrete adapters — async SQLAlchemy 2 repositories and `NvidiaKeyValidator` (httpx).
+- **api** and **mcp**: two inbound adapters that translate HTTP/MCP ⇄ use cases. Domain exceptions are mapped to HTTP status codes in a single place (`main.py`), so routers contain no error handling. The MCP layer reuses the exact same services, so RBAC and audit behave identically across REST and the Claude connector.
 
-### Decisiones relevantes
+### Notable decisions
 
-1. **Entidades = modelos ORM.** En lugar de duplicar cada entidad como dataclass + modelo + mapeadores, los servicios operan sobre los modelos SQLAlchemy y los routers los convierten a schemas Pydantic. Se mantiene la dirección de dependencias (la API nunca consulta la BD directamente; los servicios nunca importan FastAPI) con la mitad de código. Es el equilibrio estándar para servicios de este tamaño.
-2. **Rotación asistida, no automática.** NVIDIA Build no expone API oficial de creación/rotación de keys; automatizar el portal violaría los ToS. `POST /keys/{id}/rotate` hace el swap atómico y auditado una vez que el operador pega la key nueva. El puerto `KeyValidator` deja el punto de extensión listo si NVIDIA publica una API oficial de gestión.
-3. **Dispensación LRU.** `GET /keys/dispense` selecciona la key activa no expirada menos recientemente usada (`last_used_at NULLS FIRST, usage_count`), lo que reparte el uso entre keys y respeta los rate limits del free tier de NVIDIA.
-4. **Fingerprint SHA-256** de cada key para detectar duplicados sin necesidad de descifrar el inventario.
-5. **Migraciones Alembic como fuente de verdad** en producción (`AUTO_CREATE_TABLES=false`); `create_all` solo se usa en tests/desarrollo.
-6. **Factory pattern** (`create_app()`): la app se construye por proceso (uvicorn `--factory`), lo que facilita tests aislados y evita estado global.
+1. **Entities = ORM models.** Instead of duplicating every entity as dataclass + model + mappers, services operate on the SQLAlchemy models and routers convert them to Pydantic schemas. The dependency direction is preserved (the API never queries the DB directly; services never import FastAPI) with half the code. This is the standard trade-off for services of this size.
+2. **Assisted rotation, not automated.** NVIDIA Build exposes no official key creation/rotation API; automating the portal would violate the ToS. `POST /keys/{id}/rotate` performs the atomic, audited swap once the operator pastes the new key. The `KeyValidator` port leaves the extension point ready should NVIDIA publish an official management API.
+3. **LRU dispensing.** `GET /keys/dispense` picks the least-recently-used, non-expired active key (`last_used_at NULLS FIRST, usage_count`), spreading usage across keys and respecting NVIDIA free-tier rate limits.
+4. **SHA-256 fingerprint** of each key to detect duplicates without decrypting the inventory.
+5. **Alembic migrations as the source of truth** in production (`AUTO_CREATE_TABLES=false`); `create_all` is only used in tests/development.
+6. **Factory pattern** (`create_app()` / `create_asgi_app()`): the app is built per process (uvicorn `--factory`), which eases isolated tests and avoids global state. `create_asgi_app()` composes the REST/dashboard app with the MCP connector.
 
-## Modelo de datos
+## Data model
 
 ```
 users 1─────* api_keys *─────1 projects
-                 │  └── rotated_from_id (linaje de rotación, self-FK)
+                 │  └── rotated_from_id (rotation lineage, self-FK)
                  └────* usage_records
-audit_logs (append-only, sin FKs para sobrevivir a borrados)
+audit_logs (append-only, no FKs so it survives deletions)
 ```
 
-## Flujos principales
+## Main flows
 
-**Registro de key**: valida formato `nvapi-` → (opcional) validación remota contra NVIDIA → cifrado AES-GCM → fingerprint → auditoría → commit.
+**Key registration**: validate `nvapi-` format → (optional) remote validation against NVIDIA → AES-GCM encryption → fingerprint → audit → commit.
 
-**Dispensación**: selección LRU → descifrado → actualización de uso → `usage_record` → auditoría. Única respuesta de la API que contiene la key en claro.
+**Dispensing**: LRU selection → decryption → usage update → `usage_record` → audit. The only API response that contains the plaintext key.
 
-**Expiración**: job horario (APScheduler) + endpoint de mantenimiento marcan `expired` las keys vencidas; `expiring_soon` avisa con `EXPIRY_WARNING_DAYS` de antelación.
+**Expiry**: an hourly job (APScheduler) + a maintenance endpoint mark overdue keys `expired`; `expiring_soon` warns `EXPIRY_WARNING_DAYS` in advance.
 
-**Sweep de validación**: cada `VALIDATION_INTERVAL_HOURS` se valida cada key activa contra NVIDIA; las rechazadas pasan a `invalid` (y se recuperan a `active` si vuelven a validar).
+**Validation sweep**: every `VALIDATION_INTERVAL_HOURS`, each active key is validated against NVIDIA; rejected ones become `invalid` (and recover to `active` if they validate again).
+
+## Claude connector (MCP)
+
+The `mcp/` package is an inbound adapter that exposes the use cases as Model Context Protocol tools over an OAuth 2.1-secured HTTP endpoint, mounted at `/mcp` on the same service. The OAuth identity presented by Claude is mapped to an application user, so every tool call runs through the same role checks and audit trail as the REST API. See [`connector.md`](connector.md).

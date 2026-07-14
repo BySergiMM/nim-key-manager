@@ -1,45 +1,53 @@
-# Seguridad
+# Security
 
-## Cifrado en reposo
+## Encryption at rest
 
-- Cada API key se cifra con **AES-256-GCM** (nonce aleatorio de 96 bits por operación, autenticado).
-- La clave de datos se deriva del secreto maestro `ENCRYPTION_MASTER_KEY` mediante **HKDF-SHA256** (salt e info fijos versionados). El secreto maestro lo genera y custodia el secret manager de la plataforma (Render `generateValue`); nunca aparece en el repositorio.
-- Formato de almacenamiento: `enc$v1$<nonce_b64>$<ciphertext_b64>` — el prefijo de versión permite rotar el esquema criptográfico con re-cifrado incremental.
-- **Huella SHA-256** de la key para deduplicación e identificación sin descifrar.
-- **Hint** (`…XXXX`, últimos 4 caracteres) como único dato visible en UI/logs.
+- Every API key is encrypted with **AES-256-GCM** (random 96-bit nonce per operation, authenticated).
+- The data key is derived from the master secret `ENCRYPTION_MASTER_KEY` via **HKDF-SHA256** (fixed, versioned salt and info). The master secret is generated and held by the platform's secret manager (Render `generateValue`); it never appears in the repository.
+- Storage format: `enc$v1$<nonce_b64>$<ciphertext_b64>` — the version prefix allows rotating the crypto scheme with incremental re-encryption.
+- **SHA-256 fingerprint** of the key for deduplication and identification without decryption.
+- **Hint** (`…XXXX`, last 4 characters) as the only value shown in the UI/logs.
 
-## Autenticación y autorización
+## Authentication and authorization
 
-- Contraseñas con **argon2id** (pwdlib "recommended").
-- **JWT** firmados (HS256, secreto del secret manager) con `type` explícito: access (30 min) y refresh (7 días). Un refresh token no sirve como access ni viceversa.
-- **RBAC** jerárquico: `viewer < manager < admin`. La matriz completa está en el README. Guardas de invariantes: no se puede eliminar/degradar al último admin activo.
-- Bootstrap seguro: el primer usuario (por variable de entorno o primer registro) es admin; después el registro queda restringido a admins.
+- Passwords hashed with **argon2id** (pwdlib "recommended").
+- Signed **JWTs** (HS256, secret from the secret manager) with an explicit `type`: access (30 min) and refresh (7 days). A refresh token cannot be used as an access token or vice versa.
+- Hierarchical **RBAC**: `viewer < manager < admin`. The full matrix is in the README. Invariant guards: the last active admin cannot be removed/demoted.
+- Safe bootstrap: the first user (via environment variable or first registration) is admin; afterwards registration is restricted to admins.
 
-## Superficie de exposición de las keys
+## Claude connector (MCP) security
 
-La key en claro solo existe:
-1. En memoria durante registro/validación/dispensación.
-2. En la respuesta de `GET /api/v1/keys/dispense` (endpoint con rol `manager`+, rate-limited y auditado).
+- The `/mcp` endpoint is protected by **OAuth 2.1** (Authorization Code + PKCE) via GitHub or Google. Claude cannot paste a bearer token — it must complete the OAuth flow.
+- An **allow-list** (`MCP_ALLOWED_IDENTITIES`) gates who may connect; it is **fail-closed** (empty = deny everyone).
+- The OAuth identity maps to an application user, so the same RBAC and audit apply. Set `MCP_DEFAULT_ROLE=viewer`/`manager` to reduce what the connector can do; user management is never exposed over MCP.
+- FastMCP issues its own short-lived JWTs to Claude and never forwards the upstream provider token; `Host`/`Origin` are validated.
 
-Nunca se registra en logs (logging estructurado sin cuerpos de petición), nunca se devuelve en listados y nunca sale por `/metrics`.
+## Key exposure surface
 
-## Otras medidas
+The plaintext key only ever exists:
+1. In memory during registration/validation/dispensing.
+2. In the response of `GET /api/v1/keys/dispense` and the `dispense_key` MCP tool (role `manager`+, rate-limited and audited).
 
-- **Rate limiting** por IP (slowapi): global, login y dispensación con límites independientes.
-- **Auditoría inmutable**: actor, acción, recurso, IP y detalle de cada operación sensible (login, registro/rotación/revocación/dispensación de keys, cambios de usuarios y proyectos).
-- **Cabecera `X-Request-ID`** y logging JSON correlacionado por petición.
-- Contenedor **non-root**, imagen slim multi-stage, sin secretos en la imagen.
-- CORS configurable; `--proxy-headers` para IPs reales tras el proxy de Render.
-- Validación estricta de entrada con Pydantic (longitudes, formatos, prefijo `nvapi-`).
+It is never written to logs (structured logging with no request bodies), never returned in listings, and never leaves via `/metrics`.
 
-## Cumplimiento del servicio NVIDIA
+## Other measures
 
-- Única llamada saliente: `GET {NVIDIA_VALIDATION_URL}` (por defecto `https://integrate.api.nvidia.com/v1/models`), autenticada con la propia key — el mecanismo oficial y de solo lectura para comprobar validez.
-- Sin scraping del portal, sin automatización de creación/rotación (no existe API oficial), sin compartición de keys entre cuentas: el sistema gestiona exclusivamente keys de **tu propia cuenta**.
+- **Rate limiting** per IP (slowapi): global, login and dispensing with independent limits.
+- **Immutable audit**: actor, action, resource, IP and detail of every sensitive operation (login, key register/rotate/revoke/dispense, user and project changes).
+- **`X-Request-ID` header** and per-request correlated JSON logging.
+- **Non-root** container, slim multi-stage image, no secrets baked into the image.
+- Configurable CORS; `--proxy-headers` for real client IPs behind Render's proxy.
+- Strict input validation with Pydantic (lengths, formats, `nvapi-` prefix).
 
-## Recomendaciones operativas
+## NVIDIA service compliance
 
-- Rota `ENCRYPTION_MASTER_KEY` solo con procedimiento de re-cifrado (exportar → re-cifrar → importar).
-- Usa contraseñas de 12+ caracteres y activa 2FA en GitHub/Render.
-- Revisa la auditoría (`GET /api/v1/audit`) periódicamente.
-- Configura keys con expiración en NVIDIA cuando sea posible y registra `expires_at` aquí para recibir el aviso `expiring_soon`.
+- Single outbound call: `GET {NVIDIA_VALIDATION_URL}` (default `https://integrate.api.nvidia.com/v1/models`), authenticated with the key itself — the official, read-only mechanism to check validity.
+- No portal scraping, no automation of creation/rotation (no official API exists), and no sharing of keys across accounts: the system manages **your own account's** keys only. Because it is self-hosted, each operator runs their own instance with their own keys.
+
+## Operational recommendations
+
+- Rotate `ENCRYPTION_MASTER_KEY` only with a re-encryption procedure (export → re-encrypt → import).
+- Use 12+ character passwords and enable 2FA on GitHub/Render.
+- Review the audit log (`GET /api/v1/audit`) periodically.
+- Configure key expiry in NVIDIA where possible and record `expires_at` here to receive the `expiring_soon` warning.
+- Use a short-lived, least-privilege OAuth App for the connector and keep `MCP_ALLOWED_IDENTITIES` tight.

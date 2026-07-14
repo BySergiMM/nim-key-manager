@@ -67,7 +67,7 @@ Environment**; they are already declared in `render.yaml` as
 | `MCP_AUTH_PROVIDER` | `github` (or `google`) |
 | `MCP_GITHUB_CLIENT_ID` / `MCP_GOOGLE_CLIENT_ID` | Client ID from Step 1 |
 | `MCP_GITHUB_CLIENT_SECRET` / `MCP_GOOGLE_CLIENT_SECRET` | Client Secret from Step 1 |
-| `MCP_ALLOWED_IDENTITIES` | Your GitHub login and/or e-mail, comma-separated (e.g. `sergiman03,sergiman03@gmail.com`) |
+| `MCP_ALLOWED_IDENTITIES` | Your GitHub login and/or e-mail, comma-separated (e.g. `your-login,you@example.com`) |
 
 Already set for you by the blueprint: `MCP_ENABLED=true`, `MCP_AUTH_ENABLED=true`,
 `MCP_OAUTH_JWT_SIGNING_KEY` (generated). Save and let the service redeploy.
