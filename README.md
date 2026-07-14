@@ -1,4 +1,5 @@
 # NIM Key Manager
+<img width="1200" height="630" alt="NIM-KE~1" src="https://github.com/user-attachments/assets/1dc02b55-1a6d-41ff-a76b-14abb53a853d" />
 
 **Self-hosted, production-ready manager for the API keys of _your own_ NVIDIA Build/NIM account** — encrypted storage, assisted rotation, expiry detection, usage stats, projects, RBAC, audit, a web dashboard, and a **Claude MCP connector**. Deploy your own instance in a few minutes; everything is configured through environment variables.
 
