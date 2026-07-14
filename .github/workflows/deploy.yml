@@ -1,0 +1,28 @@
+name: Deploy
+
+# Render auto-deploys on push to main via render.yaml (autoDeployTrigger: commit).
+# This workflow adds an explicit, CI-gated trigger using a Render Deploy Hook,
+# so a broken build never reaches production even if autodeploy is disabled.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL not set — relying on Render autodeploy (render.yaml)."
+            exit 0
+          fi
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK_URL"
+          echo "Deploy triggered."

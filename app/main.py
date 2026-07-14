@@ -1,0 +1,189 @@
+"""Application factory and HTTP wiring."""
+
+from __future__ import annotations
+
+import time
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+import structlog
+from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from starlette.applications import Starlette
+
+from app import __version__
+from app.api.rate_limit import limiter
+from app.api.routers import audit, auth, health, keys, projects, stats, users
+from app.core.config import get_settings
+from app.core.logging import configure_logging, get_logger
+from app.domain.exceptions import (
+    ConflictError,
+    DecryptionError,
+    DomainError,
+    InvalidCredentialsError,
+    InvalidTokenError,
+    NoKeyAvailableError,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationFailedError,
+)
+from app.infrastructure.db.session import SessionFactory, init_db
+
+logger = get_logger(__name__)
+
+_STATUS_BY_EXCEPTION: tuple[tuple[type[DomainError], int], ...] = (
+    (NotFoundError, 404),
+    (NoKeyAvailableError, 404),
+    (ConflictError, 409),
+    (PermissionDeniedError, 403),
+    (InvalidCredentialsError, 401),
+    (InvalidTokenError, 401),
+    (ValidationFailedError, 422),
+    (DecryptionError, 500),
+    (DomainError, 400),
+)
+
+
+async def _seed_first_admin() -> None:
+    """Create the bootstrap admin from env vars when the user table is empty."""
+    settings = get_settings()
+    if not settings.first_admin_email or not settings.first_admin_password:
+        return
+    from app.application.services.auth_service import AuthService
+    from app.domain.enums import Role
+    from app.infrastructure.db.repositories import UserRepository
+
+    async with SessionFactory() as session:
+        if await UserRepository(session).count() == 0:
+            await AuthService(session).register(
+                email=settings.first_admin_email,
+                password=settings.first_admin_password,
+                full_name="Bootstrap admin",
+                role=Role.ADMIN,
+                actor=None,
+            )
+            logger.info("bootstrap_admin_created", email=settings.first_admin_email)
+
+
+def _make_handler(status_code: int) -> Callable[[Request, Exception], Awaitable[Response]]:
+    async def handler(request: Request, exc: Exception) -> Response:
+        headers = {"WWW-Authenticate": "Bearer"} if status_code == 401 else None
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": str(exc) or exc.__class__.__name__},
+            headers=headers,
+        )
+
+    return handler
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    configure_logging(settings.debug)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if settings.auto_create_tables:
+            await init_db()
+        await _seed_first_admin()
+        scheduler = None
+        if settings.scheduler_enabled:
+            from app.tasks.scheduler import build_scheduler
+
+            scheduler = build_scheduler()
+            scheduler.start()
+            logger.info("scheduler_started")
+        yield
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
+
+    app = FastAPI(
+        title=settings.app_name,
+        version=__version__,
+        description=(
+            "Secure lifecycle manager for NVIDIA Build/NIM API keys: encrypted storage, "
+            "assisted rotation, expiry detection, usage statistics, RBAC and audit."
+        ),
+        lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.state.limiter = limiter
+    # slowapi's handler is typed narrowly (RateLimitExceeded), Starlette expects Exception.
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    for exc_class, status_code in _STATUS_BY_EXCEPTION:
+        app.add_exception_handler(exc_class, _make_handler(status_code))
+
+    @app.middleware("http")
+    async def request_context(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        structlog.contextvars.bind_contextvars(
+            request_id=request_id, method=request.method, path=request.url.path
+        )
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = request_id
+            logger.info(
+                "http_request",
+                status_code=response.status_code,
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            )
+            return response
+        finally:
+            structlog.contextvars.clear_contextvars()
+
+    instrumentator = Instrumentator()
+    if settings.metrics_enabled:
+        try:
+            instrumentator.instrument(app)
+        except ValueError:  # collectors already registered (multiple apps per process)
+            logger.warning("metrics_already_registered")
+    instrumentator.expose(app, endpoint="/metrics", include_in_schema=False)
+
+    for router in (
+        health.router,
+        auth.router,
+        users.router,
+        keys.router,
+        projects.router,
+        stats.router,
+        audit.router,
+    ):
+        app.include_router(router)
+
+    index_file = Path(__file__).parent / "dashboard" / "static" / "index.html"
+
+    @app.get("/", include_in_schema=False)
+    async def dashboard() -> FileResponse:
+        return FileResponse(index_file)
+
+    return app
+
+
+def create_asgi_app() -> Starlette:
+    """Production ASGI entrypoint.
+
+    Wraps the REST/dashboard application (:func:`create_app`) with the Claude MCP
+    connector when ``MCP_ENABLED`` is set, exposing an OAuth-secured ``/mcp``
+    endpoint alongside the existing API. ``create_app`` is left untouched so the
+    test suite keeps exercising the pure FastAPI app.
+    """
+    from app.mcp.asgi import mount_mcp_connector
+
+    return mount_mcp_connector(create_app(), get_settings())

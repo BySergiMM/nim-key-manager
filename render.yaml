@@ -1,0 +1,55 @@
+# Render Blueprint: provisions the managed Postgres database, the web service,
+# and all secrets automatically. Deploys on every push to main.
+# Docs: https://render.com/docs/blueprint-spec
+databases:
+  - name: nim-key-manager-db
+    plan: basic-256mb
+    databaseName: nimkeys
+    user: nimkeys
+
+services:
+  - type: web
+    name: nim-key-manager
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nim-key-manager-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true            # secret manager: generated & stored by Render
+      - key: ENCRYPTION_MASTER_KEY
+        generateValue: true            # secret manager: generated & stored by Render
+      - key: FIRST_ADMIN_EMAIL
+        sync: false                    # prompted once in the Render dashboard
+      - key: FIRST_ADMIN_PASSWORD
+        sync: false                    # prompted once in the Render dashboard
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: AUTO_CREATE_TABLES
+        value: "false"
+      - key: SCHEDULER_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      # --- Claude MCP connector (OAuth 2.1) ---------------------------------
+      # PUBLIC_BASE_URL is taken automatically from RENDER_EXTERNAL_URL.
+      - key: MCP_ENABLED
+        value: "true"
+      - key: MCP_AUTH_ENABLED
+        value: "true"
+      - key: MCP_AUTH_PROVIDER
+        value: "github"                # or "google"
+      - key: MCP_OAUTH_JWT_SIGNING_KEY
+        generateValue: true            # stable signing key; issued JWTs survive restarts
+      - key: MCP_GITHUB_CLIENT_ID
+        sync: false                    # from your GitHub OAuth App
+      - key: MCP_GITHUB_CLIENT_SECRET
+        sync: false                    # from your GitHub OAuth App
+      - key: MCP_ALLOWED_IDENTITIES
+        sync: false                    # your GitHub login and/or e-mail (comma-separated)

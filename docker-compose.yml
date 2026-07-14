@@ -1,0 +1,35 @@
+# Local development parity (production runs on Render from render.yaml).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nimkeys
+      POSTGRES_PASSWORD: nimkeys
+      POSTGRES_DB: nimkeys
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nimkeys"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: development
+      DEBUG: "true"
+      DATABASE_URL: postgresql+asyncpg://nimkeys:nimkeys@db:5432/nimkeys
+      JWT_SECRET: local-dev-jwt-secret
+      ENCRYPTION_MASTER_KEY: local-dev-master-key
+      AUTO_CREATE_TABLES: "false"
+      FIRST_ADMIN_EMAIL: admin@example.com
+      FIRST_ADMIN_PASSWORD: admin-change-me
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  dbdata:
