@@ -1,0 +1,173 @@
+name: Installers
+
+# The one-command promise is a feature, so it is tested like one: on every
+# change to the installers, packaging or CLI, a clean runner installs from
+# scratch and must end up with a server answering /health.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - "install.cmd"
+      - "app/cli.py"
+      - "app/core/paths.py"
+      - "app/core/config.py"
+      - "pyproject.toml"
+      - ".github/workflows/installers.yml"
+  pull_request:
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - "install.cmd"
+      - "app/cli.py"
+      - "app/core/paths.py"
+      - "app/core/config.py"
+      - "pyproject.toml"
+      - ".github/workflows/installers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Lint install.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck (POSIX sh)
+        run: shellcheck --shell=sh install.sh
+
+  posix:
+    name: Install on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04, macos-latest, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install from the checkout
+        env:
+          NIMKM_SOURCE: ${{ github.workspace }}
+          NIMKM_HOME: ${{ runner.temp }}/nimkm
+          NIMKM_NO_MODIFY_PATH: "1"
+          NIMKM_NO_MCP_SETUP: "1"
+        run: sh install.sh
+
+      - name: Diagnose
+        run: ${{ runner.temp }}/nimkm/bin/nimkm doctor --offline
+
+      # The MCP server is the product; registering it must work on a clean box.
+      - name: Register with an MCP client
+        run: |
+          nimkm="${{ runner.temp }}/nimkm/bin/nimkm"
+          "$nimkm" mcp setup --print > entry.json
+          python3 -c "import json; d=json.load(open('entry.json')); assert d['mcpServers']['nimkm']['args'] == ['mcp','serve'], d"
+          mkdir -p "${{ runner.temp }}/project"
+          cd "${{ runner.temp }}/project"
+          "$nimkm" mcp setup --scope project --yes
+          test -f .mcp.json || (echo "::error::.mcp.json was not created" && exit 1)
+          grep -q nimkm .mcp.json
+          "$nimkm" mcp status
+          "$nimkm" mcp remove --scope project --yes
+
+      # A raw JSON-RPC session against the *installed* launcher. Linux only:
+      # `timeout` is not available on the macOS runners and a hung pipe would
+      # stall the job. The cross-platform equivalent runs in the test suite.
+      - name: Talk MCP over stdio
+        if: runner.os == 'Linux'
+        run: |
+          {
+            echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'
+            echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+            echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          } | timeout 120 "${{ runner.temp }}/nimkm/bin/nimkm" mcp serve > rpc.out 2> rpc.err || true
+          echo "--- stderr ---"; tail -5 rpc.err
+          # stdout must carry protocol and nothing else. The tools/list reply may
+          # not be flushed before the closed pipe ends the process, so the
+          # handshake is what is asserted; the tool list is covered by the suite.
+          python3 - <<'PY'
+          import json, sys
+          messages = [json.loads(line) for line in open("rpc.out") if line.strip()]
+          assert messages, "no protocol output at all"
+          assert all(m.get("jsonrpc") == "2.0" for m in messages), messages
+          handshake = next(m for m in messages if m.get("id") == 1)
+          print("server:", handshake["result"]["serverInfo"])
+          PY
+
+      - name: Serve the dashboard and answer /health
+        run: |
+          "${{ runner.temp }}/nimkm/bin/nimkm" web --port 8123 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8123/health > health.json; then break; fi
+            sleep 2
+          done
+          cat health.json
+          grep -q '"status":"ok"' health.json
+          curl -fsS -o /dev/null -w 'dashboard %{http_code}\n' http://127.0.0.1:8123/
+
+      - name: Uninstall cleanly
+        run: |
+          "${{ runner.temp }}/nimkm/bin/nimkm" uninstall --purge --yes
+          test ! -d "${{ runner.temp }}/nimkm" || (echo "home not removed" && exit 1)
+
+  windows:
+    name: Install on windows-latest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install from the checkout
+        shell: pwsh
+        run: |
+          ./install.ps1 -InstallDir "$env:RUNNER_TEMP\nimkm" -Source "$env:GITHUB_WORKSPACE" `
+            -NoModifyPath -NoMcpSetup
+
+      - name: Diagnose
+        shell: pwsh
+        run: & "$env:RUNNER_TEMP\nimkm\bin\nimkm.cmd" doctor --offline
+
+      - name: Register with an MCP client
+        shell: pwsh
+        run: |
+          $nimkm = "$env:RUNNER_TEMP\nimkm\bin\nimkm.cmd"
+          $entry = & $nimkm mcp setup --print | ConvertFrom-Json
+          if ($entry.mcpServers.nimkm.args -join ' ' -ne 'mcp serve') { throw 'bad entry' }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\project" | Out-Null
+          Set-Location "$env:RUNNER_TEMP\project"
+          & $nimkm mcp setup --scope project --yes
+          if (-not (Test-Path .mcp.json)) { throw '.mcp.json was not created' }
+          & $nimkm mcp status
+          & $nimkm mcp remove --scope project --yes
+
+      - name: Serve the dashboard and answer /health
+        shell: pwsh
+        run: |
+          $env:NIMKM_HOME = "$env:RUNNER_TEMP\nimkm"
+          $server = Start-Process -FilePath "$env:RUNNER_TEMP\nimkm\runtime\venv\Scripts\nimkm.exe" `
+            -ArgumentList 'web','--port','8123' -PassThru
+          try {
+            $ok = $false
+            foreach ($attempt in 1..30) {
+              try {
+                $health = Invoke-RestMethod 'http://127.0.0.1:8123/health' -TimeoutSec 5
+                if ($health.status -eq 'ok') { $ok = $true; break }
+              } catch { Start-Sleep -Seconds 2 }
+            }
+            if (-not $ok) { throw 'the server never became healthy' }
+            $health | ConvertTo-Json -Compress
+            (Invoke-WebRequest 'http://127.0.0.1:8123/' -UseBasicParsing).StatusCode
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Uninstall cleanly
+        shell: pwsh
+        run: |
+          $env:NIMKM_HOME = "$env:RUNNER_TEMP\nimkm"
+          & "$env:RUNNER_TEMP\nimkm\runtime\venv\Scripts\nimkm.exe" uninstall --purge --yes

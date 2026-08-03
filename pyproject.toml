@@ -4,12 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nim-key-manager"
-version = "1.1.0"
+dynamic = ["version"]                     # single source of truth: app/__init__.py
 description = "Production-grade manager for NVIDIA Build/NIM API keys: encrypted storage, assisted rotation, expiry detection, usage stats, RBAC, audit and a Claude MCP connector."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Sergi Martí" }]
+keywords = ["nvidia", "nim", "api-keys", "secrets", "mcp", "claude", "self-hosted"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Security",
+]
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -39,21 +50,55 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+# Persistent OAuth client storage for the Claude connector.
+redis = ["py-key-value-aio[redis]>=0.2"]
 
+[project.urls]
+Homepage = "https://github.com/BySergiMM/nim-key-manager"
+Documentation = "https://github.com/BySergiMM/nim-key-manager#readme"
+Source = "https://github.com/BySergiMM/nim-key-manager"
+Issues = "https://github.com/BySergiMM/nim-key-manager/issues"
+
+[project.scripts]
+nimkm = "app.cli:main"
+
+[tool.hatch.version]
+path = "app/__init__.py"
+
+# The migrations live inside the package (app/migrations) so an installed copy
+# can migrate its own database without a source checkout.
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/app",
+    "/tests",
+    "/docs",
+    "/scripts",
+    "/alembic.ini",
+    "/Dockerfile",
+    "/docker-compose.yml",
+    "/README.md",
+    "/LICENSE",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+markers = [
+    "slow: end-to-end checks that spawn a subprocess (deselect with -m 'not slow')",
+]
 
 [tool.coverage.run]
 source = ["app"]
 # SQLAlchemy asyncio bridges sync ORM internals through greenlets;
 # without this, code awaited across the greenlet boundary is not traced.
 concurrency = ["greenlet", "thread"]
-omit = ["app/tasks/*"]
+# Scheduled jobs run out of process; migration scripts are verified end-to-end
+# by the packaging job instead of by unit tests.
+omit = ["app/tasks/*", "app/migrations/*"]
 
 [tool.coverage.report]
 fail_under = 85
@@ -61,7 +106,7 @@ show_missing = true
 
 [tool.ruff]
 line-length = 100
-exclude = ["alembic/versions"]
+exclude = ["app/migrations/versions"]
 target-version = "py310"
 
 [tool.ruff.lint]
@@ -73,4 +118,4 @@ python_version = "3.10"
 ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = false
-exclude = ["alembic/"]
+exclude = ["app/migrations/"]

@@ -1,57 +1,163 @@
 # Deployment
 
-## Production: Render Blueprint (recommended, zero manual configuration)
+Most people never deploy this: the MCP server runs on demand as a child of their own
+client. Deployment is for the cases where something *else* has to reach it.
 
-`render.yaml` defines the whole infrastructure: managed PostgreSQL database, Dockerized web service, health check, auto-deploy and secrets.
+| | Command | Serves | Public URL |
+|---|---|---|---|
+| **Local (default)** | `curl … \| sh` then `nimkm mcp setup` | MCP over stdio | none — no port is opened |
+| **Local + dashboard** | `nimkm web` | dashboard + REST | loopback |
+| **Container** | `docker run … ghcr.io/bysergimm/nim-key-manager` | dashboard + REST + remote MCP | your reverse proxy |
+| **Render Blueprint** | one click | same, with managed PostgreSQL | yes, HTTPS |
 
-1. Push the repository to GitHub (or **Use this template**).
-2. In [Render](https://dashboard.render.com): **New → Blueprint** → select the repo → **Apply**.
-3. Enter when prompted (once): `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD`.
-4. Wait for the first deploy. The public URL exposes:
-   - Dashboard: `/`
-   - OpenAPI: `/docs`
-   - Health: `/health` · Prometheus metrics: `/metrics`
-   - Claude MCP connector: `/mcp` (see [`connector.md`](connector.md))
+The OAuth-protected `/mcp` endpoint needs a public HTTPS URL, so it belongs to the last
+two (or a tunnel in front of the first). See [`connector.md`](connector.md).
 
-What the blueprint automates:
+## Local install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim-key-manager/main/install.sh | sh
+```
+
+Windows: `irm https://raw.githubusercontent.com/BySergiMM/nim-key-manager/main/install.ps1 | iex`.
+
+The installer creates an isolated runtime, installs the release, generates `JWT_SECRET`,
+`ENCRYPTION_MASTER_KEY` and `MCP_OAUTH_JWT_SIGNING_KEY`, applies the migrations, creates
+the first administrator and offers to register the MCP server with the clients it finds.
+Everything lives under one directory (`NIMKM_HOME`); `nimkm doctor` explains the state of
+an installation, including where it is registered.
+
+Nothing runs in the background: your MCP client starts `nimkm mcp serve` when it needs it.
+`nimkm web` is a separate, optional process for the dashboard and REST API.
+
+To use PostgreSQL instead of the bundled SQLite:
+
+```bash
+nimkm init --database-url postgresql+asyncpg://user:pass@host:5432/nimkeys
+nimkm migrate
+```
+
+A shared PostgreSQL is also how several machines' MCP servers can see the same keys.
+
+## Container
+
+```bash
+docker run -d --name nimkm -p 8000:8000 -v nimkm:/data \
+  ghcr.io/bysergimm/nim-key-manager:latest
+```
+
+With no environment at all the entrypoint provisions itself: SQLite in `/data`,
+secrets generated once into `/data/secrets.env` (mode 600). **That volume is the
+crown jewels** — without `ENCRYPTION_MASTER_KEY` the stored keys cannot be decrypted.
+Back it up, or provide the secrets yourself:
+
+```yaml
+# compose.yaml — production shape with PostgreSQL
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nimkeys
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it}
+      POSTGRES_DB: nimkeys
+    volumes: [dbdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nimkeys"]
+      interval: 5s
+      retries: 10
+
+  app:
+    image: ghcr.io/bysergimm/nim-key-manager:latest
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://nimkeys:${POSTGRES_PASSWORD}@db:5432/nimkeys
+      JWT_SECRET: ${JWT_SECRET:?generate one}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?generate one}
+      PUBLIC_BASE_URL: https://keys.example.com
+      FIRST_ADMIN_EMAIL: you@example.com
+      FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:?set it}
+volumes:
+  dbdata:
+```
+
+Generate secrets with `python -c "import secrets;print(secrets.token_urlsafe(48))"`.
+Migrations run on every container start; the health check hits `/health`.
+
+Any platform that runs an OCI container works the same way — Fly.io, Railway, Cloud Run,
+ECS, Kubernetes. Behind a reverse proxy the entrypoint already passes `--proxy-headers`.
+
+## Render Blueprint (managed PostgreSQL + HTTPS)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BySergiMM/nim-key-manager)
+
+`render.yaml` provisions everything: managed PostgreSQL, the Dockerised web service, the
+health check, auto-deploy and the generated secrets.
+
+1. **New → Blueprint** → select the repo → **Apply**.
+2. Enter `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD` when prompted.
+3. Open the service URL: dashboard at `/`, OpenAPI at `/docs`, health at `/health`,
+   metrics at `/metrics`, Claude connector at `/mcp`.
 
 | Resource | Detail |
 |---|---|
 | Managed PostgreSQL | `nim-key-manager-db`, Render backups |
-| `DATABASE_URL` | Injected from the DB (auto-normalized to asyncpg) |
+| `DATABASE_URL` | Injected from the DB (auto-normalised to asyncpg) |
 | `JWT_SECRET`, `ENCRYPTION_MASTER_KEY`, `MCP_OAUTH_JWT_SIGNING_KEY` | Generated by Render's secret manager |
 | `PUBLIC_BASE_URL` | Taken automatically from `RENDER_EXTERNAL_URL` |
-| Migrations | `alembic upgrade head` on every container start |
-| Auto-deploy | On every push to `main` |
-| Health check | `/health` (automatic restart on failure) |
+| Migrations | Applied on every container start |
+| Health check | `/health`, automatic restart on failure |
 
-To enable the Claude connector you additionally set (via the Render dashboard, declared as `sync: false` in the blueprint): `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` and `MCP_ALLOWED_IDENTITIES`. Full guide in [`connector.md`](connector.md).
+The Claude connector stays **idle** until you set `MCP_GITHUB_CLIENT_ID`,
+`MCP_GITHUB_CLIENT_SECRET` and `MCP_ALLOWED_IDENTITIES` (declared `sync: false` in the
+blueprint). The service starts and serves the API either way — see
+[`connector.md`](connector.md).
 
 ## CI/CD (GitHub Actions)
 
-- **`ci.yml`** (push/PR): ruff → mypy → pytest with a ≥85% coverage gate → Docker image build (cached).
-- **`deploy.yml`**: if you set the `RENDER_DEPLOY_HOOK_URL` secret (Render → Settings → Deploy Hook), the deploy fires **only when CI passes**. If you don't set it, the blueprint's auto-deploy takes over.
+| Workflow | Trigger | What it guarantees |
+|---|---|---|
+| `ci.yml` | push / PR | ruff, mypy, pytest (≥85% coverage, including a real stdio MCP session), the wheel really contains the migrations and dashboard, and a zero-config container boots healthy |
+| `installers.yml` | changes to installers/CLI/packaging | a clean Ubuntu, macOS and Windows runner installs from scratch, registers with an MCP client, answers a raw JSON-RPC session, serves `/health` and uninstalls cleanly |
+| `release.yml` | `git push origin v1.2.0` | version/tag match, full gate, wheel + sdist + checksums + provenance, multi-arch GHCR image, GitHub Release, optional PyPI |
+| `deploy.yml` | after a green CI on `main` | triggers the Render deploy hook if `RENDER_DEPLOY_HOOK_URL` is set |
 
-Recommendation: disable "Auto-Deploy" in Render and use the hook so no broken commit reaches production.
+Recommendation: disable Render's auto-deploy and rely on the hook, so no broken commit
+reaches production.
+
+## Publishing a new version
+
+```bash
+# 1. bump the single source of truth
+#    app/__init__.py -> __version__ = "1.3.0"
+git commit -am "chore: release 1.3.0"
+git tag v1.3.0
+git push origin main --tags
+```
+
+The release workflow refuses to publish if the tag and `__version__` disagree. Users
+then get it with `nimkm update` or a fresh `curl … | sh`.
 
 ## Monitoring and logs
 
-- **Logs**: structured JSON (structlog) to stdout → Render's log viewer (or any aggregator: Datadog, Grafana Loki…). Every line includes `request_id`, path, status and duration.
-- **Metrics**: `/metrics` in Prometheus format (latencies, status codes, throughput per handler). Compatible with Grafana Cloud / remote Prometheus.
-- **Health**: `/health` checks the database connection.
-- **Jobs**: expiry (hourly) and the NVIDIA validation sweep (every 6 h) record results in logs and the audit trail.
+- **Logs**: structured JSON (structlog) to stdout, with `request_id`, path, status and duration.
+- **Metrics**: `/metrics` in Prometheus format.
+- **Health**: `/health` verifies the database connection.
+- **Jobs**: expiry check (hourly) and NVIDIA validation sweep (every 6 h) log results and write to the audit trail.
 
 ## Environment variables
 
-See [`.env.example`](../.env.example) for the full annotated list.
+`nimkm init` writes sane values into `config.env`; real environment variables always take
+precedence. The full annotated list is in [`.env.example`](../.env.example). The minimum
+for a manual deployment is `DATABASE_URL`, `JWT_SECRET` and `ENCRYPTION_MASTER_KEY`
+(plus `PUBLIC_BASE_URL` and the `MCP_*` variables for the connector).
 
-## Deployment alternatives
-
-The image is a standard OCI container (port `$PORT`, migrations in the entrypoint), so it runs unchanged on Fly.io, Railway, Cloud Run or ECS: it only needs `DATABASE_URL`, `JWT_SECRET` and `ENCRYPTION_MASTER_KEY` (plus `PUBLIC_BASE_URL` and the `MCP_*` variables if you enable the Claude connector).
-
-## Local development (optional)
+## Local development
 
 ```bash
+pip install -e ".[dev]"
 docker compose up --build   # app + PostgreSQL 16
-# Dashboard at http://localhost:8000 (admin@example.com / admin-change-me)
 ```
+
+Dashboard at <http://localhost:8000> (`admin@example.com` / `admin-change-me`).

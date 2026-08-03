@@ -1,15 +1,27 @@
-# Claude MCP Connector
+# MCP: local (stdio) and remote (OAuth)
 
-NIM Key Manager ships a **Model Context Protocol (MCP) server** so you can add it
-to Claude as a **custom connector**. Once connected, Claude can list and inspect
-your NVIDIA keys, request a ready-to-use key, register/rotate/revoke keys and
-manage projects — all through the same audited, role-checked services as the REST
-API.
+NIM Key Manager **is** an MCP server. It speaks two transports over the same tools,
+the same roles and the same audit trail:
 
-The connector is served by the *same* deployment at `‹PUBLIC_BASE_URL›/mcp`. No
-separate service to run.
+| | **stdio** (default) | **HTTP + OAuth 2.1** (this document) |
+|---|---|---|
+| Who runs it | your client, as a child process | you, as a deployed service |
+| Reachable from | that one machine | anywhere, over HTTPS |
+| Authentication | the operating system | GitHub/Google, plus an allow-list |
+| Setup | `nimkm mcp setup` | this document |
+| Ports opened | none | one |
 
-## How authentication works
+**If your client runs on the same machine as your keys, you want stdio** — one command,
+no OAuth app, no public URL:
+
+```bash
+nimkm mcp setup      # detects Claude Code / Claude Desktop, backs up, registers
+```
+
+Read on only if you need Claude on the web or on your phone to reach a *deployed*
+instance. Both transports can be enabled at once; they share one database.
+
+## How remote authentication works
 
 Claude custom connectors speak **OAuth 2.1** (Authorization Code + PKCE) and
 expect Dynamic Client Registration. Claude does **not** support pasting a bearer
@@ -27,11 +39,31 @@ Claude ──OAuth 2.1/PKCE──▶  ‹PUBLIC_BASE_URL›/authorize ──▶ 
 Claude ──Bearer JWT──────▶  ‹PUBLIC_BASE_URL›/mcp   (tools)
 ```
 
+## The short version
+
+```bash
+nimkm mcp oauth     # prompts for the OAuth credentials and writes them
+nimkm mcp status    # endpoint, provider and allow-list
+```
+
+`nimkm mcp oauth` prints the exact callback URL to paste into the OAuth app and stores
+the result in `config.env`. The rest of this document explains what it is doing and
+covers the deployed (Render) case, where the same values are set as environment
+variables instead.
+
+Until credentials exist the connector is **idle**: `/mcp` is not mounted and the REST
+API, dashboard and health check run normally. Nothing crashes because the connector is
+unconfigured.
+
 ## Prerequisites
 
-- The service deployed and reachable over HTTPS (see [`deployment.md`](deployment.md)).
+- The service reachable over HTTPS at a stable URL (see [`deployment.md`](deployment.md)),
+  started with `nimkm web` (or the container image, which does it for you).
   On Render the public URL is injected automatically as `RENDER_EXTERNAL_URL`;
-  `PUBLIC_BASE_URL` is derived from it, so you normally don't set it by hand.
+  `PUBLIC_BASE_URL` is derived from it, so you normally don't set it by hand. For a
+  laptop install, put a tunnel in front (`cloudflared tunnel --url http://localhost:8000`)
+  and set `PUBLIC_BASE_URL` to the tunnel URL — Claude connects from the internet, not
+  from your machine. (If the client is *on* that laptop, use stdio instead.)
 - A GitHub account (default) or a Google Cloud project (alternative).
 
 ## Step 1 — Create the OAuth application
@@ -154,13 +186,26 @@ dashboard or REST API.
   persist them (`py-key-value-aio[redis]` is required for the Redis store).
 - **`identity is not allowed`** — add your GitHub login/e-mail to `MCP_ALLOWED_IDENTITIES`.
 
-## Local development (no OAuth)
+## Appendix: how the stdio transport differs
 
-For local testing you can disable auth — **never do this on a public deployment**:
+`nimkm mcp serve` is the same tool surface with a different trust model, and it is worth
+being explicit about it:
+
+- **No OAuth, by design.** The client spawns the server as a child process with the
+  user's own permissions; there is no socket and nothing to authenticate *to*. Anything
+  able to talk to it could already read `config.env`.
+- **It acts as a local administrator.** A dedicated account, `local@nimkm.internal`, is
+  created on first use (`.internal` is IANA-reserved, so the address can never resolve).
+  Use `--identity you@example.com` to act as a different, existing account — for example
+  one with the `viewer` role, if you want the client to be read-only.
+- **stdout carries protocol only.** All logging is redirected to stderr; if your client
+  reports a parse error, check that nothing in your shell profile prints on start-up.
+- **No background jobs.** The scheduler stays off in a client-spawned process; expiry
+  checks and validation sweeps run in `nimkm web` or the container.
+
+To watch what a session is doing, run the command yourself and type at it — it waits
+silently for JSON-RPC on stdin and logs to stderr:
 
 ```bash
-MCP_AUTH_ENABLED=false PUBLIC_BASE_URL=http://localhost:8000 \
-  uvicorn app.main:create_asgi_app --factory
+nimkm mcp serve
 ```
-
-With auth disabled the actor resolves to `MCP_DEV_IDENTITY` (or the first admin).

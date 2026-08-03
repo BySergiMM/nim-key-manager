@@ -1,0 +1,12 @@
+# Shell scripts must keep LF endings: a CRLF install.sh fails with
+# "bad interpreter: /bin/sh^M" on Linux and macOS.
+*.sh text eol=lf
+scripts/entrypoint.sh text eol=lf
+Dockerfile text eol=lf
+
+# PowerShell and cmd are happier with CRLF on Windows.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+
+# Everything else: normalise in the repository, native on checkout.
+* text=auto

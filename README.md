@@ -1,119 +1,300 @@
-# NIM Key Manager
-<img width="1200" height="630" alt="NIM-KE~1" src="https://github.com/user-attachments/assets/1dc02b55-1a6d-41ff-a76b-14abb53a853d" />
+<div align="center">
 
-**Self-hosted, production-ready manager for the API keys of _your own_ NVIDIA Build/NIM account** — encrypted storage, assisted rotation, expiry detection, usage stats, projects, RBAC, audit, a web dashboard, and a **Claude MCP connector**. Deploy your own instance in a few minutes; everything is configured through environment variables.
+# NIM Key Manager
+
+<img width="1200" height="630" alt="NIM Key Manager" src="https://github.com/user-attachments/assets/1dc02b55-1a6d-41ff-a76b-14abb53a853d" />
+
+**An MCP server for the API keys of _your own_ NVIDIA Build/NIM account.**
+
+Ask Claude for a key and it hands you one — encrypted at rest, rotated on request, every access audited.
 
 [![CI](https://github.com/BySergiMM/nim-key-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/BySergiMM/nim-key-manager/actions/workflows/ci.yml)
+[![Installers](https://github.com/BySergiMM/nim-key-manager/actions/workflows/installers.yml/badge.svg)](https://github.com/BySergiMM/nim-key-manager/actions/workflows/installers.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
-[![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen.svg)](#development--tests)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20OAuth-8A2BE2.svg)](https://modelcontextprotocol.io)
 
-> **NVIDIA Terms of Service.** NVIDIA Build offers **no public API** to create or rotate keys programmatically (you generate them at [build.nvidia.com](https://build.nvidia.com/settings/api-keys)), and API keys **must not be shared or redistributed** to third parties. This project is therefore designed for **you to manage your _own_ keys on your _own_ instance**: the only outbound call is the official read-only **validation** endpoint `GET https://integrate.api.nvidia.com/v1/models`. It does not automate or scrape the NVIDIA portal, and it is **not** a service for handing your keys to other people.
+</div>
 
-## Deploy your own (no local setup)
+## Install
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BySergiMM/nim-key-manager)
-
-1. Click the button (or **Use this template → Create repository**, then in [Render](https://render.com) pick **New → Blueprint** and select your fork). Render reads [`render.yaml`](render.yaml) and provisions **everything automatically**:
-   - a managed PostgreSQL database,
-   - the Dockerized web service with a health check,
-   - the secrets `JWT_SECRET`, `ENCRYPTION_MASTER_KEY` and `MCP_OAUTH_JWT_SIGNING_KEY` (generated and stored by Render's secret manager),
-   - `DATABASE_URL` injected from the database.
-2. When prompted, set `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD` (your initial admin, created on first boot).
-3. Open the service URL: log in at `/`, explore the API at `/docs`.
-4. Every push to `main` runs CI (lint + types + tests + build) and redeploys automatically. Migrations (`alembic upgrade head`) run on container start.
-
-Prefer another host? Any platform that runs a Docker container + PostgreSQL works — see [`docs/deployment.md`](docs/deployment.md).
-
-## Use it from Claude (MCP connector)
-
-The same deployment exposes a **Model Context Protocol server** at `‹BASE›/mcp` so you can add it to **Claude as a custom connector**. Claude authenticates with **OAuth 2.1** (GitHub by default, Google optional) and can list/inspect keys, **dispense** a ready-to-use key, register/rotate/revoke and manage projects — with the same RBAC and audit trail as the REST API. Only identities in `MCP_ALLOWED_IDENTITIES` may connect (fail-closed).
-
-1. Create a GitHub **OAuth App** with callback `‹BASE›/auth/callback`; copy the Client ID/Secret.
-2. In Render set `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` and `MCP_ALLOWED_IDENTITIES` (your GitHub login/e-mail). The rest is already in `render.yaml`.
-3. In Claude: **Settings → Connectors → Add custom connector** → URL `‹BASE›/mcp` → **Connect**.
-
-Full guide (Google, tool reference, security, troubleshooting): [`docs/connector.md`](docs/connector.md).
-
-## Features
-
-- **Secure key registration** — encrypted at rest with AES-256-GCM (key derived via HKDF-SHA256 from the platform secret manager). Never stored or logged in plaintext.
-- **Assisted, audited rotation** — you create the new key in your NVIDIA account, paste it, and the system performs an atomic swap (new key active, old one revoked with a `rotated_from_id` lineage link).
-- **Expiry detection** — hourly background job + maintenance endpoint; configurable `expiring_soon` flag.
-- **Periodic validation** — automatic sweep against NVIDIA every 6 h (configurable) that flags invalid/revoked keys.
-- **Key dispensing** — `GET /api/v1/keys/dispense` returns the least-recently-used active key (LRU), globally or per project, recording usage.
-- **Projects** — group keys by consumer/workload.
-- **Statistics** — inventory by status, dispenses, usage time series.
-- **Security** — JWT (access + refresh), roles `admin`/`manager`/`viewer`, rate limiting, immutable audit of every sensitive operation.
-- **Claude connector (MCP)** — OAuth-secured MCP server at `/mcp` (see above).
-- **Operations** — structured JSON logging, Prometheus metrics at `/metrics`, health check at `/health`, OpenAPI at `/docs`.
-
-## Architecture
-
-```
-app/
-├── domain/           # Enums and domain exceptions (no dependencies)
-├── application/      # Use cases (services) and ports (interfaces)
-│   └── services/     # auth, users, keys, projects, stats, audit
-├── infrastructure/   # Adapters: SQLAlchemy (repositories) and NVIDIA gateway
-├── api/              # FastAPI: routers, schemas, deps, rate limiting
-├── mcp/              # Claude connector: MCP server, OAuth and identity mapping
-├── dashboard/        # Lightweight SPA served at /
-├── tasks/            # Scheduled jobs (APScheduler)
-└── core/             # Config, crypto, security, logging
-```
-
-Pragmatic Clean Architecture: dependencies point inward; the application layer knows nothing about FastAPI and reaches NVIDIA through the `KeyValidator` port. Details and decisions in [`docs/architecture.md`](docs/architecture.md).
-
-**Stack**: Python 3.12 · FastAPI · FastMCP (Claude connector) · SQLAlchemy 2 (async) · managed PostgreSQL · Alembic · Docker · GitHub Actions · Render (Blueprint) · structlog · Prometheus · slowapi · APScheduler.
-
-## API quickstart
+**Linux / macOS**
 
 ```bash
-BASE=https://your-service.onrender.com
+curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim-key-manager/main/install.sh | sh
+```
 
-# Log in (the admin was created on first boot)
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/BySergiMM/nim-key-manager/main/install.ps1 | iex
+```
+
+The installer finds Claude Code on your machine and asks for permission to register the
+server (it backs the file up first). Say yes, restart Claude Code, and you are done.
+
+Already installed, or answered no?
+
+```bash
+nimkm mcp setup
+```
+
+That is everything. There is no runtime to install, no database to provision, no config
+file to write, no API server to keep running.
+
+## Then just ask
+
+> **"list my NVIDIA keys"**
+> **"give me a NIM key for this script"**
+> **"register this key I just created at build.nvidia.com"**
+> **"rotate the prod-1 key, here is the new one"**
+> **"which of my keys expire this month?"**
+> **"who used my keys last week?"**
+
+Claude picks the right tool, the server enforces roles and writes the audit entry.
+
+<details>
+<summary><b>The 19 tools it exposes</b></summary>
+
+| Area | Tools |
+|---|---|
+| Keys | `list_keys` · `get_key` · `register_key` · `validate_key` · `rotate_key` · `revoke_key` · `delete_key` · `check_expirations` |
+| Use | `dispense_key` (least-recently-used active key, globally or per project) |
+| Projects | `list_projects` · `get_project` · `create_project` · `update_project` · `delete_project` · `assign_key_to_project` |
+| Insight | `stats_overview` · `usage_stats` · `list_audit` |
+| Session | `whoami` |
+
+`dispense_key` is the one that returns plaintext — everything else works with hints and
+fingerprints, and nothing is ever written to a log.
+
+</details>
+
+## Other MCP clients
+
+`nimkm mcp setup` knows Claude Code (user and project scope) and Claude Desktop. For
+anything else, print the declaration and paste it in:
+
+```bash
+nimkm mcp setup --print
+```
+
+```json
+{
+  "mcpServers": {
+    "nimkm": {
+      "command": "/home/you/.local/share/nim-key-manager/bin/nimkm",
+      "args": ["mcp", "serve"],
+      "env": { "NIMKM_HOME": "/home/you/.local/share/nim-key-manager" }
+    }
+  }
+}
+```
+
+| Flag | Effect |
+|---|---|
+| `--scope user` | Claude Code, all your projects (`~/.claude.json`) |
+| `--scope project` | this repository only (`./.mcp.json`, commit it for your team) |
+| `--scope desktop` | Claude Desktop |
+| `--name <name>` | register under a different name |
+| `--yes` | skip the confirmation prompt |
+| `--print` | print the JSON, change nothing |
+
+`nimkm mcp status` shows where it is registered; `nimkm mcp remove` undoes it. Every
+write is preceded by a timestamped backup of the file.
+
+## The dashboard (optional)
+
+The same instance has a web UI and a REST API for the things a chat is bad at — browsing
+the audit trail, managing accounts, wiring an application to `/api/v1/keys/dispense`.
+
+```bash
+nimkm web            # http://127.0.0.1:8000
+```
+
+It is off unless you start it. The MCP server does not need it.
+
+<details>
+<summary><b>REST quickstart</b></summary>
+
+```bash
+BASE=http://127.0.0.1:8000
+
 TOKEN=$(curl -s $BASE/api/v1/auth/login -H 'Content-Type: application/json' \
-  -d '{"email":"you@example.com","password":"your-password"}' | jq -r .access_token)
+  -d '{"email":"admin@nimkm.internal","password":"<the password nimkm printed>"}' | jq -r .access_token)
 
-# Register a key created at build.nvidia.com (validating it against NVIDIA)
-curl -s $BASE/api/v1/keys -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"prod-1","api_key":"nvapi-...","validate_remote":true}'
-
-# Get an available key (LRU) to use in your application
 curl -s "$BASE/api/v1/keys/dispense" -H "Authorization: Bearer $TOKEN"
 ```
 
-More examples (rotation, projects, stats, audit) in [`docs/api-examples.md`](docs/api-examples.md). Interactive OpenAPI at `/docs`.
+More in [`docs/api-examples.md`](docs/api-examples.md); interactive OpenAPI at `/docs`.
+Lost the password? `nimkm admin reset-password --email admin@nimkm.internal`.
 
-## Roles
+</details>
 
-| Operation | viewer | manager | admin |
-|---|---|---|---|
-| View keys, projects and stats | ✅ | ✅ | ✅ |
-| Register / validate / rotate / revoke / dispense keys | ❌ | ✅ | ✅ |
-| Manage projects | ❌ | ✅ | ✅ |
-| Delete keys, manage users, read the audit log | ❌ | ❌ | ✅ |
-
-## Development & tests
-
-Not required to deploy, but fully supported:
+## Commands
 
 ```bash
-pip install -e ".[dev]"
-pytest --cov=app          # required coverage gate: 85% (currently ~94%)
-ruff check . && mypy app
-docker compose up         # local stack with PostgreSQL
+nimkm mcp setup           # connect to your MCP client (the only one you need)
+nimkm mcp status          # where it is registered, and as what
+nimkm mcp serve           # the server itself -- your client runs this, not you
+nimkm mcp remove          # unregister
+nimkm doctor              # diagnose everything, with the fix for each problem
+nimkm web                 # dashboard + REST API
+nimkm admin reset-password --email you@example.com
+nimkm update              # upgrade in place
+nimkm uninstall --purge   # remove everything
 ```
+
+## Remote access (advanced)
+
+Everything above is local: your client spawns the server as a child process and no port
+is opened. If you want Claude on the web or on your phone to reach the *same* instance,
+deploy it and use the OAuth-protected HTTP connector instead:
+
+```bash
+docker run -d -p 8000:8000 -v nimkm:/data ghcr.io/bysergimm/nim-key-manager
+nimkm mcp oauth      # GitHub/Google OAuth for the /mcp endpoint
+```
+
+Or one click on Render for a managed PostgreSQL and an HTTPS URL:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BySergiMM/nim-key-manager)
+
+Then in Claude: **Settings → Connectors → Add custom connector** → `‹your-url›/mcp`.
+Only identities in `MCP_ALLOWED_IDENTITIES` may connect (fail-closed). Full guide:
+[`docs/connector.md`](docs/connector.md) · deployment options: [`docs/deployment.md`](docs/deployment.md).
+
+> **NVIDIA Terms of Service.** NVIDIA Build offers **no public API** to create or rotate
+> keys (you generate them in the portal), and API keys **must not be shared or
+> redistributed**. This project manages **your own keys on your own machine**: the only
+> outbound call is the official read-only validation endpoint
+> `GET https://integrate.api.nvidia.com/v1/models`. It does not automate or scrape the
+> NVIDIA portal, and it is **not** a service for handing your keys to other people.
+
+## Where things live
+
+One directory, easy to back up and easy to delete:
+
+| | Path |
+|---|---|
+| **Linux** | `~/.local/share/nim-key-manager` |
+| **macOS** | `~/Library/Application Support/nim-key-manager` |
+| **Windows** | `%LOCALAPPDATA%\nim-key-manager` |
+
+```
+<home>/config.env      generated secrets, chmod 600
+<home>/data/nimkm.db   your encrypted keys
+<home>/runtime/        the self-contained runtime
+<home>/bin/nimkm       the launcher your MCP client runs
+```
+
+Override with `NIMKM_HOME`. Moving to a new machine means copying that folder — the data
+is useless without `ENCRYPTION_MASTER_KEY`, so copy both or neither.
+
+## Update & uninstall
+
+```bash
+nimkm update                # in place; keeps config, data and your registrations
+nimkm uninstall             # remove the program, keep the keys
+nimkm uninstall --purge     # remove everything
+```
+
+`nimkm mcp remove` first if you want the entry gone from your client config.
+
+## Troubleshooting
+
+`nimkm doctor` checks the client registration, secrets, database, migrations, ports and
+NVIDIA reachability, and prints the command that fixes each problem. Start there.
+
+| Symptom | Cause / fix |
+|---|---|
+| Claude does not list the tools | Restart the client — MCP servers are read at startup. Then `nimkm mcp status`. |
+| `nimkm: command not found` | The PATH change applies to *new* shells. Open a new terminal, or `source ~/.profile`. |
+| `irm … \| iex` fails on Windows | `Set-ExecutionPolicy -Scope Process Bypass` first, or download `install.ps1` and run it with `-ExecutionPolicy Bypass`. |
+| Client shows the server as failed | Run `nimkm mcp serve` yourself: it should sit there silently waiting for input. Any error appears on stderr. |
+| Registered, but the wrong install answers | `nimkm mcp status` warns when the entry points elsewhere; `nimkm mcp setup` repoints it. |
+| "not valid JSON … refusing to overwrite" | Your client's config file is corrupt. Fix or move it; the tool will never rewrite a file it cannot parse. |
+| `port 8000 is already in use` | Only affects `nimkm web`: `nimkm web --port 8001`. |
+| Dashboard login fails | `nimkm admin reset-password --email you@example.com`. |
+| Container forgot everything | You ran it without a volume: `-v nimkm:/data`. |
+
+`NIMKM_DEBUG=1 nimkm <command>` prints the full traceback.
+[Issues](https://github.com/BySergiMM/nim-key-manager/issues) welcome.
+
+## FAQ
+
+**What do I need installed?**
+Nothing. The installer brings a self-contained runtime; there is no interpreter, service
+or database to set up.
+
+**Does it run all the time?**
+No. Your MCP client starts it when it needs it and stops it when it closes. The dashboard
+is a separate, optional process.
+
+**Is it safe over stdio without a login?**
+The transport *is* the boundary: the server runs as a child of your own client, with your
+own file permissions, reachable only through that pipe. Anything that could speak to it
+could already read your config file. Remote access is the case that needs OAuth, and it
+has it.
+
+**Where do my keys go?**
+Into a local database, encrypted with AES-256-GCM using a secret generated on your
+machine at install time. They never leave it except when you ask for one.
+
+**Can I use it from more than one client?**
+Yes — register it in each one; they share the same database. `--scope project` puts the
+declaration in `./.mcp.json` so a team gets it from version control (they each keep their
+own keys).
+
+**Which database?**
+SQLite by default — no setup. For a shared server:
+`nimkm init --database-url postgresql+asyncpg://user:pass@host/db`.
+
+**Can I run it without an AI client at all?**
+Yes: `nimkm web` gives you the dashboard and the REST API.
+
+## Under the hood
+
+```
+app/
+├── mcp/              # the MCP surface: stdio transport, client registration,
+│                     #   tools, OAuth for remote access, identity mapping
+├── domain/           # enums and domain exceptions (no dependencies)
+├── application/      # use cases (services) and ports (interfaces)
+├── infrastructure/   # SQLAlchemy repositories, NVIDIA gateway, migrations
+├── api/              # REST layer for the dashboard and integrations
+├── dashboard/        # the web UI
+├── migrations/       # Alembic revisions, shipped inside the package
+├── core/             # config, paths, crypto, security, logging
+└── cli.py            # the nimkm command
+```
+
+Pragmatic Clean Architecture: dependencies point inward, and the MCP tools and the REST
+endpoints are two adapters over the *same* services — so roles and the audit trail behave
+identically whichever way a key is touched. Details in
+[`docs/architecture.md`](docs/architecture.md); the installation and release design in
+[`INSTALLATION_REDESIGN.md`](INSTALLATION_REDESIGN.md).
+
+## Development
+
+```bash
+git clone https://github.com/BySergiMM/nim-key-manager.git
+cd nim-key-manager
+pip install -e ".[dev]"
+
+ruff check . && mypy app && pytest --cov=app   # the CI gate (coverage ≥85%)
+```
+
+Point your own client at the checkout with `nimkm mcp setup --scope project`. Releases:
+bump `__version__` in `app/__init__.py`, then `git tag v1.3.0 && git push --tags`.
 
 ## Security
 
-Threat model, cryptographic details and design decisions in [`docs/security.md`](docs/security.md). Key points: AES-256-GCM encryption with a key derived (HKDF) from the secret manager, SHA-256 fingerprints to deduplicate without exposing the secret, short-lived signed JWTs, argon2 password hashing, per-IP rate limiting, audit of every sensitive operation, and no plaintext keys in logs or responses except the explicit dispense endpoint. To report a vulnerability, see [`SECURITY.md`](SECURITY.md).
+[`docs/security.md`](docs/security.md) has the threat model: AES-256-GCM with an
+HKDF-derived key, SHA-256 fingerprints for deduplication without exposing secrets,
+argon2 password hashing, short-lived JWTs for the web layer, rate limiting, and an
+immutable audit trail. The service refuses to start in production with the shipped
+development placeholders. Vulnerabilities: [`SECURITY.md`](SECURITY.md).
 
 ## Contributing
 
-Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). A short Spanish overview is available in [`README.es.md`](README.es.md).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Spanish overview: [`README.es.md`](README.es.md). MIT — see [LICENSE](LICENSE).

@@ -60,7 +60,9 @@ def resolve_email(identity: Identity) -> str:
         return identity.email.lower()
     if identity.login:
         return f"{identity.login.lower()}@users.noreply.github.com"
-    return f"{identity.subject}@mcp.local"
+    # ``.internal`` is IANA-reserved for private use; ``.local`` would be
+    # rejected by e-mail validation when the user is serialised back out.
+    return f"{identity.subject}@nimkm.internal"
 
 
 def is_allowed(identity: Identity, settings: Settings) -> bool:

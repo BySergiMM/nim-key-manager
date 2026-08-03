@@ -38,6 +38,34 @@ jobs:
           name: coverage
           path: coverage.xml
 
+  packaging:
+    name: Packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # A wheel that installs but cannot migrate itself is the failure mode that
+      # made every non-Docker install impossible, so it is checked on every PR.
+      - name: Build and inspect the wheel
+        run: |
+          pip install build
+          python -m build --wheel
+          python -m zipfile -l dist/*.whl | tee contents.txt
+          grep -q "app/migrations/versions/" contents.txt \
+            || (echo "::error::the wheel does not ship the Alembic migrations" && exit 1)
+          grep -q "app/dashboard/static/index.html" contents.txt \
+            || (echo "::error::the wheel does not ship the dashboard" && exit 1)
+
+      - name: Install it and check the entry point
+        run: |
+          pip install ./dist/*.whl
+          nimkm --version
+          nimkm --help > /dev/null
+
   docker:
     name: Docker build
     runs-on: ubuntu-latest
@@ -52,5 +80,20 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: nim-key-manager:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # `docker run` with no environment at all must produce a healthy service.
+      - name: Zero-configuration container boots and is healthy
+        run: |
+          docker run -d --name nimkm-ci -p 8000:8000 nim-key-manager:ci
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8000/health > health.json; then break; fi
+            sleep 3
+          done
+          cat health.json
+          grep -q '"status":"ok"' health.json
+          docker logs nimkm-ci | tail -20
+          docker rm -f nimkm-ci

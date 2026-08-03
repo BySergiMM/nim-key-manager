@@ -39,6 +39,8 @@ services:
         value: "true"
       # --- Claude MCP connector (OAuth 2.1) ---------------------------------
       # PUBLIC_BASE_URL is taken automatically from RENDER_EXTERNAL_URL.
+      # The connector stays idle (and the service starts normally) until the
+      # three sync:false variables below are filled in -- see docs/connector.md.
       - key: MCP_ENABLED
         value: "true"
       - key: MCP_AUTH_ENABLED

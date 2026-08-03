@@ -36,9 +36,26 @@ def _allowed_hosts(settings: Settings, base_url: str) -> list[str]:
 
 
 def mount_mcp_connector(api_app: Starlette, settings: Settings) -> Starlette:
-    """Return the composed ASGI app, or ``api_app`` unchanged when MCP is off."""
+    """Return the composed ASGI app, or ``api_app`` unchanged when MCP is off.
+
+    The connector is optional: an instance that has not been given OAuth
+    credentials yet serves the REST API and dashboard normally and simply logs
+    how to enable ``/mcp``. Only an explicitly *half*-configured connector (some
+    credentials but no public URL) is treated as a fatal misconfiguration.
+    """
     if not settings.mcp_enabled:
         logger.info("mcp_connector_disabled")
+        return api_app
+
+    if settings.mcp_auth_enabled and not settings.mcp_credentials_configured():
+        logger.info(
+            "mcp_connector_not_configured",
+            detail=(
+                "MCP connector idle: set MCP_"
+                f"{settings.mcp_auth_provider.upper()}_CLIENT_ID/_SECRET and "
+                "MCP_ALLOWED_IDENTITIES to enable it (see docs/connector.md)"
+            ),
+        )
         return api_app
 
     base_url = settings.resolve_public_base_url()

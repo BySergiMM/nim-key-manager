@@ -86,7 +86,7 @@ def test_resolve_email_prefers_email() -> None:
 
 def test_resolve_email_falls_back_to_login_then_subject() -> None:
     assert resolve_email(Identity("1", "Octo", None, None)) == "octo@users.noreply.github.com"
-    assert resolve_email(Identity("sub-9", None, None, None)) == "sub-9@mcp.local"
+    assert resolve_email(Identity("sub-9", None, None, None)) == "sub-9@nimkm.internal"
 
 
 def test_is_allowed_matrix() -> None:
@@ -315,10 +315,22 @@ def test_mount_disabled_returns_same_app() -> None:
     assert mount_mcp_connector(sentinel, settings) is sentinel  # type: ignore[arg-type]
 
 
+def test_mount_skips_connector_when_oauth_is_not_configured() -> None:
+    """An instance without OAuth credentials still serves the REST API."""
+    settings = get_settings().model_copy(update={
+        "mcp_enabled": True, "mcp_auth_enabled": True,
+        "mcp_github_client_id": None, "mcp_github_client_secret": None,
+    })
+    sentinel = object()
+    assert mount_mcp_connector(sentinel, settings) is sentinel  # type: ignore[arg-type]
+
+
 def test_mount_requires_base_url_when_authenticated(monkeypatch) -> None:
+    """Half-configured (credentials but no public URL) is a hard error."""
     monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
     settings = get_settings().model_copy(update={
         "mcp_enabled": True, "mcp_auth_enabled": True, "public_base_url": None,
+        "mcp_github_client_id": "cid", "mcp_github_client_secret": "secret",
     })
     with pytest.raises(ConfigurationError):
         mount_mcp_connector(object(), settings)  # type: ignore[arg-type]

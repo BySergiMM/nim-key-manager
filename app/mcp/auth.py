@@ -10,6 +10,7 @@ the upstream provider token.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from app.core.config import Settings
@@ -21,6 +22,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from key_value.aio.protocols import AsyncKeyValue
 
 logger = get_logger(__name__)
+
+#: Set by :func:`app.mcp.stdio.prepare_environment` so the auth factory can tell
+#: "local process" apart from "unauthenticated network endpoint".
+STDIO_TRANSPORT_ENV = "NIMKM_MCP_TRANSPORT"
 
 # Redirect URIs Claude uses for the OAuth callback. Whitelisted so the OAuth
 # proxy accepts Claude's dynamic client callback.
@@ -37,7 +42,12 @@ def build_auth_provider(settings: Settings, base_url: str) -> AuthProvider | Non
     used for local development/testing (``MCP_AUTH_ENABLED=false``).
     """
     if not settings.mcp_auth_enabled:
-        logger.warning("mcp_auth_disabled", detail="MCP endpoint is UNAUTHENTICATED")
+        if os.environ.get(STDIO_TRANSPORT_ENV) == "stdio":
+            # Over stdio the client already runs as the local user: the operating
+            # system is the authentication boundary, not OAuth.
+            logger.info("mcp_stdio_local", detail="serving the local user over stdio")
+        else:
+            logger.warning("mcp_auth_disabled", detail="MCP endpoint is UNAUTHENTICATED")
         return None
 
     signing_key = settings.mcp_oauth_jwt_signing_key or settings.jwt_secret

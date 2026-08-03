@@ -1,0 +1,243 @@
+name: Release
+
+# Publishing a version is a single action:
+#
+#     git tag v1.2.0 && git push origin v1.2.0
+#
+# which runs the full quality gate, builds the wheel that install.sh downloads,
+# pushes a multi-architecture container image to GHCR and creates the GitHub
+# Release with signed provenance.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v1.2.0"
+        required: true
+
+permissions: {}
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # --------------------------------------------------------------------- #
+  # 1. Nothing ships unless it is green and the tag matches the source.    #
+  # --------------------------------------------------------------------- #
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]" build
+
+      - name: Tag must match app/__init__.py
+        id: version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          source_version=$(python -c "import app; print(app.__version__)")
+          if [ "${tag#v}" != "$source_version" ]; then
+            echo "::error::tag $tag does not match __version__ $source_version."
+            echo "::error::Bump app/__init__.py, commit, then re-tag."
+            exit 1
+          fi
+          echo "version=$source_version" >> "$GITHUB_OUTPUT"
+
+      - name: Lint, types and tests
+        run: |
+          ruff check .
+          mypy app
+          pytest --cov=app --cov-report=term
+
+  # --------------------------------------------------------------------- #
+  # 2. The wheel installed by install.sh / install.ps1 / pipx / uv.        #
+  # --------------------------------------------------------------------- #
+  build:
+    name: Build distributions
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build wheel and sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Verify the wheel ships the migrations and the entry point
+        run: |
+          pip install --quiet ./dist/*.whl
+          nimkm --version
+          python - <<'PY'
+          from app.infrastructure.db import migrations
+          assert migrations.MIGRATIONS_DIR.is_dir(), "migrations missing from the wheel"
+          assert list((migrations.MIGRATIONS_DIR / "versions").glob("*.py")), "no revisions"
+          print("wheel contents verified")
+          PY
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*.whl"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+  # --------------------------------------------------------------------- #
+  # 3. Container image for servers: docker run ghcr.io/<owner>/<repo>      #
+  # --------------------------------------------------------------------- #
+  container:
+    name: Publish container image
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Lowercase image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (amd64 + arm64)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ needs.verify.outputs.version }}
+            ${{ steps.image.outputs.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  # --------------------------------------------------------------------- #
+  # 4. The Release the installers read to find the newest wheel.          #
+  # --------------------------------------------------------------------- #
+  release:
+    name: Publish GitHub Release
+    needs: [verify, build, container]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          cat > notes.md <<EOF
+          ## Install
+
+          **Linux / macOS**
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh
+          \`\`\`
+
+          **Windows (PowerShell)**
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.ps1 | iex
+          \`\`\`
+
+          **Docker**
+          \`\`\`sh
+          docker run -d -p 8000:8000 -v nimkm:/data ${IMAGE,,}:${VERSION}
+          \`\`\`
+
+          Already installed? \`nimkm update\`
+
+          ---
+          EOF
+          gh release create "$TAG" \
+            --title "v${VERSION}" \
+            --notes-file notes.md \
+            --generate-notes \
+            dist/* \
+          || gh release upload "$TAG" dist/* --clobber
+
+  # --------------------------------------------------------------------- #
+  # 5. Optional PyPI publish (trusted publishing, no API token stored).    #
+  #    Enable with: repository variable PUBLISH_TO_PYPI = true             #
+  # --------------------------------------------------------------------- #
+  pypi:
+    name: Publish to PyPI
+    needs: [verify, build]
+    if: vars.PUBLISH_TO_PYPI == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist
+
+      - name: Remove non-distribution files
+        run: rm -f dist/SHA256SUMS
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

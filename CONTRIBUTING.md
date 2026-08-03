@@ -19,11 +19,31 @@ git clone https://github.com/BySergiMM/nim-key-manager.git
 cd nim-key-manager
 pip install -e ".[dev]"
 
-# Run the local stack (app + PostgreSQL) if you prefer Docker:
-docker compose up --build
+nimkm up                    # the CLI is installed with the package
+docker compose up --build   # or the full stack with PostgreSQL
 ```
 
-By default the app runs on SQLite locally; set `DATABASE_URL` for PostgreSQL.
+By default the app runs on SQLite; set `DATABASE_URL` for PostgreSQL. Configuration is
+read from the environment first, then `./.env`, then the generated `config.env` in
+`NIMKM_HOME` — so exporting a variable always wins while you are developing.
+
+### Layout worth knowing
+
+- `app/mcp/stdio.py` — the transport clients actually use. **Nothing may print to
+  stdout** in that code path; it carries JSON-RPC. Logging goes to stderr.
+- `app/mcp/clients.py` — discovery and editing of client configuration files. It touches
+  user data, so: back up first, refuse to rewrite what does not parse, preserve every
+  unrelated key, write atomically.
+- `app/cli.py` — the `nimkm` command (stdlib only; heavy imports stay inside commands).
+  No user-facing string names Python, uv, uvicorn or FastAPI.
+- `app/migrations/` — Alembic revisions, **inside the package** so the wheel can migrate
+  itself. `alembic.ini` at the root only exists for `alembic revision --autogenerate`.
+- `install.sh` / `install.ps1` — the one-command installers, exercised on every platform
+  by `.github/workflows/installers.yml`.
+
+Anything that changes installation or the MCP surface must keep those workflows green;
+they are the contract behind the README's first command. To try your checkout against a
+real client: `nimkm mcp setup --scope project`.
 
 ## Quality gates (must pass before a PR is merged)
 

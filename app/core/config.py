@@ -6,31 +6,55 @@ import os
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core import paths
 from app.domain.enums import Role
+
+# Placeholders shipped as defaults so the package imports without configuration.
+# They are refused outside development/test (see ``insecure_defaults``).
+INSECURE_JWT_SECRET = "insecure-dev-secret-change-me"
+INSECURE_MASTER_KEY = "insecure-dev-master-key-change-me"
+
+_LOCAL_ENVIRONMENTS = frozenset({"development", "dev", "local", "test", "testing"})
 
 
 class Settings(BaseSettings):
-    """Central, typed application configuration."""
+    """Central, typed application configuration.
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    Values are resolved in this order (first match wins): process environment,
+    a ``.env`` in the working directory (development), then the generated
+    ``config.env`` in the install home (see :mod:`app.core.paths`). The last one
+    is what ``nimkm init`` writes, so an installed CLI works from any directory.
+    """
+
+    model_config = SettingsConfigDict(
+        # pydantic-settings gives precedence to the *last* file in the tuple.
+        env_file=(paths.config_file(), ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Core
     app_name: str = "NIM Key Manager"
     environment: str = "production"
     debug: bool = False
 
+    # HTTP server (``nimkm serve``). PORT is what PaaS providers inject.
+    host: str = "127.0.0.1"
+    port: int = 8000
+
     # Security
-    jwt_secret: str = "insecure-dev-secret-change-me"
+    jwt_secret: str = INSECURE_JWT_SECRET
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
-    encryption_master_key: str = "insecure-dev-master-key-change-me"
+    encryption_master_key: str = INSECURE_MASTER_KEY
 
-    # Database
-    database_url: str = "sqlite+aiosqlite:///./local.db"
+    # Database. Defaults to SQLite inside the install home so the location does
+    # not depend on the working directory the process was started from.
+    database_url: str = Field(default_factory=paths.default_database_url)
     auto_create_tables: bool = True
 
     # Bootstrap admin (created on first startup when the user table is empty)
@@ -154,6 +178,46 @@ class Settings(BaseSettings):
         """Public base URL, falling back to Render's injected external URL."""
         url = self.public_base_url or os.environ.get("RENDER_EXTERNAL_URL")
         return url.rstrip("/") if url else None
+
+    # ------------------------------------------------------------------
+    # Readiness helpers (used by startup checks and ``nimkm doctor``)
+    # ------------------------------------------------------------------
+    @property
+    def is_local_environment(self) -> bool:
+        return self.environment.strip().lower() in _LOCAL_ENVIRONMENTS
+
+    def insecure_defaults(self) -> list[str]:
+        """Names of secrets still set to the shipped placeholder values."""
+        placeholders = {
+            "JWT_SECRET": (self.jwt_secret, INSECURE_JWT_SECRET),
+            "ENCRYPTION_MASTER_KEY": (self.encryption_master_key, INSECURE_MASTER_KEY),
+        }
+        return [name for name, (value, default) in placeholders.items() if value == default]
+
+    def require_secure_secrets(self) -> None:
+        """Refuse to start outside development with the shipped placeholders.
+
+        API keys are encrypted with a value derived from
+        ``ENCRYPTION_MASTER_KEY``; booting with the public default would make the
+        stored ciphertext trivially decryptable, so this fails closed.
+        """
+        if self.is_local_environment:
+            return
+        missing = self.insecure_defaults()
+        if missing:
+            from app.domain.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                f"{' and '.join(missing)} still use the built-in development "
+                "placeholder. Run 'nimkm init' to generate real secrets, or set "
+                "them in the environment (ENVIRONMENT=development skips this check)."
+            )
+
+    def mcp_credentials_configured(self) -> bool:
+        """True when OAuth credentials for the selected provider are present."""
+        if self.mcp_auth_provider == "google":
+            return bool(self.mcp_google_client_id and self.mcp_google_client_secret)
+        return bool(self.mcp_github_client_id and self.mcp_github_client_secret)
 
 
 @lru_cache
