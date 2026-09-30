@@ -34,6 +34,7 @@ It is never written to logs (structured logging with no request bodies), never r
 
 - **Rate limiting** per IP (slowapi): global, login and dispensing with independent limits.
 - **Immutable audit**: actor, action, resource, IP and detail of every sensitive operation (login, key register/rotate/revoke/dispense, user and project changes).
+- **Dashboard hardening**: the dashboard is a static page that renders every API value (key and project names, audit actors, IP addresses…) as text with `textContent`, never as HTML, and it is served with a strict `Content-Security-Policy` (`default-src 'self'`, no inline script or style, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`). A hostile key or project name therefore cannot run script in an administrator's browser.
 - **`X-Request-ID` header** and per-request correlated JSON logging.
 - **Non-root** container, slim multi-stage image, no secrets baked into the image.
 - Configurable CORS; `--proxy-headers` for real client IPs behind Render's proxy.

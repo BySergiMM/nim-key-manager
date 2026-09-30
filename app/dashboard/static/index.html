@@ -4,69 +4,37 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NIM Key Manager</title>
-<style>
-:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#76b900;--red:#f85149;--yellow:#d29922;--blue:#58a6ff}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif}
-.container{max-width:1100px;margin:0 auto;padding:24px}
-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
-h1{font-size:20px}h1 span{color:var(--green)}
-h2{font-size:15px;margin-bottom:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:20px;margin-bottom:20px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center}
-.card .num{font-size:26px;font-weight:700;color:var(--green)}
-.card .lbl{color:var(--muted);font-size:12px}
-table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px}
-th{color:var(--muted);font-weight:600}
-input,select{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 10px;font-size:13px}
-button{background:var(--green);border:none;border-radius:6px;color:#0d1117;font-weight:600;padding:8px 14px;cursor:pointer;font-size:13px}
-button.secondary{background:transparent;border:1px solid var(--border);color:var(--text)}
-button.danger{background:var(--red);color:#fff}
-button:hover{opacity:.85}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
-.badge.active{background:rgba(118,185,0,.15);color:var(--green)}
-.badge.expired,.badge.invalid{background:rgba(210,153,34,.15);color:var(--yellow)}
-.badge.revoked{background:rgba(248,81,73,.15);color:var(--red)}
-.badge.warn{background:rgba(210,153,34,.25);color:var(--yellow)}
-nav{display:flex;gap:6px;margin-bottom:20px}
-nav button{background:transparent;border:1px solid var(--border);color:var(--muted)}
-nav button.on{background:var(--green);color:#0d1117;border-color:var(--green)}
-#msg{position:fixed;bottom:20px;right:20px;background:var(--panel);border:1px solid var(--green);border-radius:8px;padding:12px 16px;display:none;max-width:420px;word-break:break-all}
-#msg.err{border-color:var(--red)}
-.hidden{display:none}
-label{color:var(--muted);font-size:12px;display:block;margin-bottom:2px}
-.field{display:flex;flex-direction:column}
-</style>
+<!-- No inline <style>, <script>, style="" or on*="" attributes: the page is served with a
+     strict Content-Security-Policy (script-src 'self'; style-src 'self'). -->
+<link rel="stylesheet" href="/static/dashboard.css">
+<script src="/static/dashboard.js" defer></script>
 </head>
 <body>
 <div class="container">
   <header>
     <h1><span>NVIDIA</span> NIM Key Manager</h1>
     <div id="who" class="row hidden">
-      <span id="whoami" style="color:var(--muted)"></span>
-      <button class="secondary" onclick="logout()">Salir</button>
+      <span id="whoami" class="muted"></span>
+      <button id="btn-logout" class="secondary">Salir</button>
     </div>
   </header>
 
   <!-- Login -->
-  <div id="login" class="panel" style="max-width:380px;margin:60px auto">
+  <div id="login" class="panel login-panel">
     <h2>Iniciar sesión</h2>
-    <div class="field" style="margin-bottom:10px"><label>Email</label><input id="lemail" type="email"></div>
-    <div class="field" style="margin-bottom:14px"><label>Contraseña</label><input id="lpass" type="password"></div>
-    <button onclick="login()" style="width:100%">Entrar</button>
-    <p style="color:var(--muted);font-size:12px;margin-top:10px">El primer usuario registrado se convierte en administrador (bootstrap vía API o variables de entorno).</p>
+    <div class="field mb-10"><label>Email</label><input id="lemail" type="email"></div>
+    <div class="field mb-14"><label>Contraseña</label><input id="lpass" type="password"></div>
+    <button id="btn-login" class="w-100">Entrar</button>
+    <p class="note">El primer usuario registrado se convierte en administrador (bootstrap vía API o variables de entorno).</p>
   </div>
 
   <!-- App -->
   <div id="app" class="hidden">
     <nav>
-      <button id="tab-overview" class="on" onclick="show('overview')">Resumen</button>
-      <button id="tab-keys" onclick="show('keys')">API Keys</button>
-      <button id="tab-projects" onclick="show('projects')">Proyectos</button>
-      <button id="tab-audit" onclick="show('audit')">Auditoría</button>
+      <button id="tab-overview" class="on">Resumen</button>
+      <button id="tab-keys">API Keys</button>
+      <button id="tab-projects">Proyectos</button>
+      <button id="tab-audit">Auditoría</button>
     </nav>
 
     <div id="view-overview">
@@ -79,10 +47,10 @@ label{color:var(--muted);font-size:12px;display:block;margin-bottom:2px}
         <h2>Registrar nueva API Key</h2>
         <div class="row">
           <div class="field"><label>Nombre</label><input id="kname" placeholder="mi-key-prod"></div>
-          <div class="field"><label>API Key (nvapi-…)</label><input id="kvalue" style="width:280px" placeholder="nvapi-..."></div>
+          <div class="field"><label>API Key (nvapi-…)</label><input id="kvalue" class="w-280" placeholder="nvapi-..."></div>
           <div class="field"><label>Proyecto</label><select id="kproject"><option value="">— ninguno —</option></select></div>
           <div class="field"><label>Expira (opcional)</label><input id="kexp" type="date"></div>
-          <div class="field"><label>&nbsp;</label><button onclick="createKey()">Registrar</button></div>
+          <div class="field"><label>&nbsp;</label><button id="btn-create-key">Registrar</button></div>
         </div>
       </div>
       <div class="panel">
@@ -96,8 +64,8 @@ label{color:var(--muted);font-size:12px;display:block;margin-bottom:2px}
         <h2>Nuevo proyecto</h2>
         <div class="row">
           <input id="pname" placeholder="nombre">
-          <input id="pdesc" placeholder="descripción" style="width:300px">
-          <button onclick="createProject()">Crear</button>
+          <input id="pdesc" class="w-300" placeholder="descripción">
+          <button id="btn-create-project">Crear</button>
         </div>
       </div>
       <div class="panel"><h2>Proyectos</h2><table id="projects"><thead><tr><th>Nombre</th><th>Descripción</th><th>Creado</th><th></th></tr></thead><tbody></tbody></table></div>
@@ -109,146 +77,5 @@ label{color:var(--muted);font-size:12px;display:block;margin-bottom:2px}
   </div>
 </div>
 <div id="msg"></div>
-
-<script>
-'use strict';
-let token = sessionStorage.getItem('nkm_token') || null;
-
-function el(id){return document.getElementById(id)}
-function toast(text, isErr){const m=el('msg');m.textContent=text;m.className=isErr?'err':'';m.style.display='block';setTimeout(()=>m.style.display='none',4000)}
-function fmt(d){return d?new Date(d).toLocaleString():'—'}
-
-async function api(path, opts={}){
-  opts.headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
-  if(token) opts.headers['Authorization'] = 'Bearer ' + token;
-  const res = await fetch(path, opts);
-  if(res.status === 401 && path !== '/api/v1/auth/login'){logout();throw new Error('sesión expirada')}
-  if(!res.ok){
-    let detail = res.statusText;
-    try{const body=await res.json();detail=typeof body.detail==='string'?body.detail:JSON.stringify(body.detail)}catch(e){}
-    throw new Error(detail);
-  }
-  return res.status === 204 ? null : res.json();
-}
-
-async function login(){
-  try{
-    const data = await api('/api/v1/auth/login',{method:'POST',body:JSON.stringify({email:el('lemail').value,password:el('lpass').value})});
-    token = data.access_token;
-    sessionStorage.setItem('nkm_token', token);
-    await boot();
-  }catch(e){toast('Login: '+e.message,true)}
-}
-
-function logout(){token=null;sessionStorage.removeItem('nkm_token');el('app').classList.add('hidden');el('who').classList.add('hidden');el('login').classList.remove('hidden')}
-
-async function boot(){
-  try{
-    const me = await api('/api/v1/auth/me');
-    el('whoami').textContent = me.email + ' (' + me.role + ')';
-    el('login').classList.add('hidden');
-    el('app').classList.remove('hidden');
-    el('who').classList.remove('hidden');
-    await Promise.all([loadOverview(), loadKeys(), loadProjects(), loadAudit()]);
-  }catch(e){logout()}
-}
-
-function show(name){
-  for(const v of ['overview','keys','projects','audit']){
-    el('view-'+v).classList.toggle('hidden', v!==name);
-    el('tab-'+v).classList.toggle('on', v===name);
-  }
-}
-
-async function loadOverview(){
-  const s = await api('/api/v1/stats/overview');
-  const by = s.keys_by_status||{};
-  el('cards').innerHTML = [
-    ['Keys totales', s.total_keys],['Activas', by.active||0],['Revocadas', by.revoked||0],
-    ['Expiradas', by.expired||0],['Expiran pronto', s.keys_expiring_soon],
-    ['Dispensaciones', s.total_dispenses],['Proyectos', s.total_projects],['Usuarios', s.total_users]
-  ].map(c=>'<div class="card"><div class="num">'+c[1]+'</div><div class="lbl">'+c[0]+'</div></div>').join('');
-  const usage = await api('/api/v1/stats/usage?days=30');
-  el('usage').querySelector('tbody').innerHTML = usage.length
-    ? usage.map(u=>'<tr><td>'+u.date+'</td><td>'+u.count+'</td></tr>').join('')
-    : '<tr><td colspan="2" style="color:var(--muted)">Sin uso registrado</td></tr>';
-}
-
-async function loadKeys(){
-  const keys = await api('/api/v1/keys');
-  el('keys').querySelector('tbody').innerHTML = keys.map(k=>{
-    const warn = k.expiring_soon ? ' <span class="badge warn">expira pronto</span>' : '';
-    const actions = [
-      '<button class="secondary" onclick="validateKey(\''+k.id+'\')">Validar</button>',
-      k.status==='active' ? '<button class="secondary" onclick="rotateKey(\''+k.id+'\')">Rotar</button>' : '',
-      k.status!=='revoked' ? '<button class="danger" onclick="revokeKey(\''+k.id+'\')">Revocar</button>' : ''
-    ].join(' ');
-    return '<tr><td>'+k.name+'</td><td><code>'+k.key_hint+'</code></td><td><span class="badge '+k.status+'">'+k.status+'</span>'+warn+'</td><td>'+k.usage_count+'</td><td>'+fmt(k.expires_at)+'</td><td>'+fmt(k.last_validated_at)+'</td><td class="row">'+actions+'</td></tr>';
-  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No hay keys registradas</td></tr>';
-}
-
-async function createKey(){
-  try{
-    const body = {name:el('kname').value, api_key:el('kvalue').value, validate_remote:true};
-    if(el('kproject').value) body.project_id = el('kproject').value;
-    if(el('kexp').value) body.expires_at = new Date(el('kexp').value+'T23:59:59Z').toISOString();
-    await api('/api/v1/keys',{method:'POST',body:JSON.stringify(body)});
-    el('kname').value=el('kvalue').value=el('kexp').value='';
-    toast('Key registrada y validada contra NVIDIA');
-    await Promise.all([loadKeys(),loadOverview()]);
-  }catch(e){toast(e.message,true)}
-}
-
-async function validateKey(id){
-  try{const r=await api('/api/v1/keys/'+id+'/validate',{method:'POST'});toast('Resultado: '+r.result);await loadKeys()}catch(e){toast(e.message,true)}
-}
-
-async function rotateKey(id){
-  const nk = prompt('Pega la NUEVA API key creada en build.nvidia.com/settings/api-keys.\nLa key antigua quedará revocada:');
-  if(!nk) return;
-  try{await api('/api/v1/keys/'+id+'/rotate',{method:'POST',body:JSON.stringify({api_key:nk})});toast('Rotación completada');await Promise.all([loadKeys(),loadOverview()])}catch(e){toast(e.message,true)}
-}
-
-async function revokeKey(id){
-  if(!confirm('¿Revocar esta key? Dejará de dispensarse.')) return;
-  try{await api('/api/v1/keys/'+id+'/revoke',{method:'POST'});toast('Key revocada');await Promise.all([loadKeys(),loadOverview()])}catch(e){toast(e.message,true)}
-}
-
-async function loadProjects(){
-  const projects = await api('/api/v1/projects');
-  el('kproject').innerHTML = '<option value="">— ninguno —</option>' +
-    projects.map(p=>'<option value="'+p.id+'">'+p.name+'</option>').join('');
-  el('projects').querySelector('tbody').innerHTML = projects.map(p=>
-    '<tr><td>'+p.name+'</td><td>'+(p.description||'—')+'</td><td>'+fmt(p.created_at)+'</td><td><button class="danger" onclick="deleteProject(\''+p.id+'\')">Eliminar</button></td></tr>'
-  ).join('') || '<tr><td colspan="4" style="color:var(--muted)">No hay proyectos</td></tr>';
-}
-
-async function createProject(){
-  try{
-    await api('/api/v1/projects',{method:'POST',body:JSON.stringify({name:el('pname').value,description:el('pdesc').value||null})});
-    el('pname').value=el('pdesc').value='';
-    toast('Proyecto creado');
-    await loadProjects();
-  }catch(e){toast(e.message,true)}
-}
-
-async function deleteProject(id){
-  if(!confirm('¿Eliminar proyecto? Sus keys quedarán sin asignar.')) return;
-  try{await api('/api/v1/projects/'+id,{method:'DELETE'});toast('Proyecto eliminado');await loadProjects()}catch(e){toast(e.message,true)}
-}
-
-async function loadAudit(){
-  try{
-    const entries = await api('/api/v1/audit?limit=100');
-    el('audit').querySelector('tbody').innerHTML = entries.map(a=>
-      '<tr><td>'+fmt(a.created_at)+'</td><td>'+(a.actor_email||'sistema')+'</td><td>'+a.action+'</td><td>'+(a.resource_type||'')+' '+(a.resource_id?a.resource_id.slice(0,8):'')+'</td><td>'+(a.ip_address||'—')+'</td></tr>'
-    ).join('');
-  }catch(e){
-    el('audit').querySelector('tbody').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Solo visible para administradores</td></tr>';
-  }
-}
-
-if(token) boot();
-</script>
 </body>
 </html>

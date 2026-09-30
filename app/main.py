@@ -37,6 +37,30 @@ from app.infrastructure.db.session import SessionFactory, init_db
 
 logger = get_logger(__name__)
 
+DASHBOARD_DIR = Path(__file__).parent / "dashboard" / "static"
+
+# The dashboard is a static shell: dashboard.js renders every API value with textContent
+# only. This policy is the second layer. Even if a value ever reached the DOM as markup,
+# inline script, inline handlers and third-party origins are refused, so it cannot run.
+DASHBOARD_CSP = "; ".join(
+    (
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    )
+)
+_DASHBOARD_HEADERS = {
+    "Content-Security-Policy": DASHBOARD_CSP,
+    "X-Content-Type-Options": "nosniff",
+    # Revalidate on every load (ETag/Last-Modified still apply) so a redeploy never
+    # leaves a browser pairing a new index.html with an old dashboard.js.
+    "Cache-Control": "no-cache",
+}
+
 _STATUS_BY_EXCEPTION: tuple[tuple[type[DomainError], int], ...] = (
     (NotFoundError, 404),
     (NoKeyAvailableError, 404),
@@ -167,11 +191,22 @@ def create_app() -> FastAPI:
     ):
         app.include_router(router)
 
-    index_file = Path(__file__).parent / "dashboard" / "static" / "index.html"
+    # Explicit routes (not a StaticFiles mount): exactly these three files are exposed,
+    # each with the dashboard security headers and an explicit media type.
+    def dashboard_asset(name: str, media_type: str) -> FileResponse:
+        return FileResponse(DASHBOARD_DIR / name, media_type=media_type, headers=_DASHBOARD_HEADERS)
 
     @app.get("/", include_in_schema=False)
     async def dashboard() -> FileResponse:
-        return FileResponse(index_file)
+        return dashboard_asset("index.html", "text/html")
+
+    @app.get("/static/dashboard.js", include_in_schema=False)
+    async def dashboard_script() -> FileResponse:
+        return dashboard_asset("dashboard.js", "text/javascript")
+
+    @app.get("/static/dashboard.css", include_in_schema=False)
+    async def dashboard_style() -> FileResponse:
+        return dashboard_asset("dashboard.css", "text/css")
 
     return app
 
