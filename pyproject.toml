@@ -74,3 +74,10 @@ ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = false
 exclude = ["alembic/"]
+
+# Deprecated 3.0 (pulled in by slowapi -> limits) needs Python >= 3.12 and uses the
+# PEP 695 `type` statement, which mypy cannot parse while python_version is 3.10.
+# Nothing in app/ depends on its types, so do not follow the import into it.
+[[tool.mypy.overrides]]
+module = ["deprecated", "deprecated.*"]
+follow_imports = "skip"
