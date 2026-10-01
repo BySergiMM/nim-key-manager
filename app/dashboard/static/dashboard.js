@@ -61,10 +61,15 @@ async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   if (res.status === 401 && path !== '/api/v1/auth/login') { logout(); throw new Error('sesión expirada'); }
   if (!res.ok) {
-    let detail = res.statusText;
+    // HTTP/2 has no reason phrase, so statusText can be empty.
+    let detail = res.statusText || ('HTTP ' + res.status);
     try {
       const body = await res.json();
-      detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+      // The API answers {"detail": ...}; the rate limiter (429) answers {"error": ...}.
+      const message = body.detail !== undefined ? body.detail : body.error;
+      if (message !== undefined) {
+        detail = typeof message === 'string' ? message : JSON.stringify(message);
+      }
     } catch (e) { /* the body was not JSON: keep the status text */ }
     throw new Error(detail);
   }
