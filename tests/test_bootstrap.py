@@ -12,6 +12,7 @@ from those two variables and ``scripts/create_admin.py``. No HTTP request can cr
 from __future__ import annotations
 
 import importlib.util
+import secrets
 import sys
 from pathlib import Path
 
@@ -20,14 +21,15 @@ import pytest
 from app.application.services.auth_service import AuthService
 from app.core.config import get_settings
 from app.domain.enums import Role
-from app.domain.exceptions import ConflictError, PermissionDeniedError
+from app.domain.exceptions import ConfigurationError, ConflictError, PermissionDeniedError
 from app.infrastructure.db.repositories import UserRepository
 from app.infrastructure.db.session import SessionFactory
-from app.main import _seed_first_admin
+from app.main import _seed_first_admin, create_app
 from tests.conftest import ADMIN, RecordingLogger
 
 ROOT = Path(__file__).resolve().parent.parent
 ATTACKER = {"email": "attacker@example.com", "password": "Password123!"}
+EXAMPLE_PASSWORD = "change-me-strong-password"  # the one .env.example ships
 
 
 async def count_users() -> int:
@@ -117,6 +119,65 @@ async def test_the_first_administrator_can_only_be_created_on_an_empty_installat
                 email="second@example.com", password="Password123!"
             )
         assert await UserRepository(session).get_by_email("second@example.com") is None
+
+
+def run_as_production(monkeypatch) -> None:
+    """Production with good secrets, so only FIRST_ADMIN_PASSWORD can be what is judged."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "jwt_secret", secrets.token_urlsafe(48))
+    monkeypatch.setattr(settings, "encryption_master_key", secrets.token_urlsafe(48))
+
+
+async def test_a_leftover_example_password_does_not_stop_an_installation_that_has_users(
+    client, admin_headers, monkeypatch
+):
+    """Restarting a running service must not fail because of a variable nobody reads any more."""
+    run_as_production(monkeypatch)
+    configure_first_admin(monkeypatch, ADMIN["email"], EXAMPLE_PASSWORD)
+    recorder = RecordingLogger()
+    monkeypatch.setattr("app.main.logger", recorder)
+
+    app = create_app()  # the start-up secret check used to refuse here
+    async with app.router.lifespan_context(app):  # ...and the seeding runs on start-up
+        pass
+
+    assert await count_users() == 1
+    [(level, event, fields)] = recorder.events
+    assert (level, event) == ("warning", "first_admin_password_ignored")
+    assert EXAMPLE_PASSWORD not in str(fields)
+    assert (await login(client, ADMIN["email"], ADMIN["password"])).status_code == 200
+
+
+async def test_the_example_password_never_creates_the_first_administrator(client, monkeypatch):
+    run_as_production(monkeypatch)
+    configure_first_admin(monkeypatch, "boss@example.com", EXAMPLE_PASSWORD)
+
+    with pytest.raises(ConfigurationError) as refused:
+        await _seed_first_admin()
+
+    assert await count_users() == 0
+    assert "FIRST_ADMIN_PASSWORD" in str(refused.value)
+    assert EXAMPLE_PASSWORD not in str(refused.value)
+    assert (await login(client, "boss@example.com", EXAMPLE_PASSWORD)).status_code == 401
+
+
+async def test_a_password_of_your_own_creates_the_first_administrator_in_production(
+    client, monkeypatch
+):
+    run_as_production(monkeypatch)
+    configure_first_admin(monkeypatch, "boss@example.com", "correct horse battery staple")
+    await _seed_first_admin()
+    assert (
+        await login(client, "boss@example.com", "correct horse battery staple")
+    ).status_code == 200
+
+
+async def test_the_example_password_still_works_for_local_development(client, monkeypatch):
+    """ENVIRONMENT=test here: the check has always been skipped for local environments."""
+    configure_first_admin(monkeypatch, "dev@example.com", EXAMPLE_PASSWORD)
+    await _seed_first_admin()
+    assert (await login(client, "dev@example.com", EXAMPLE_PASSWORD)).status_code == 200
 
 
 @pytest.mark.parametrize(

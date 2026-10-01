@@ -212,8 +212,10 @@ class Settings(BaseSettings):
             )
         if self.metrics_token is not None:
             check("METRICS_TOKEN", self.metrics_token, minimum=MIN_SECRET_LENGTH)
-        if self.first_admin_password is not None and is_placeholder(self.first_admin_password):
-            problems.append("FIRST_ADMIN_PASSWORD is a placeholder from the example configuration")
+        # FIRST_ADMIN_PASSWORD is not judged here: it only matters while there is no user, which
+        # this synchronous start-up check cannot know. app.main._seed_first_admin refuses to
+        # create the administrator with a placeholder password, and ignores it (with a warning)
+        # once users exist, so a leftover example value never takes down a running installation.
         return problems
 
     def require_secure_secrets(self) -> None:
@@ -232,9 +234,8 @@ class Settings(BaseSettings):
                 f"Refusing to start with ENVIRONMENT={self.environment}: "
                 + "; ".join(problems)
                 + f". Use your own random values of at least {MIN_SECRET_LENGTH} characters "
-                "(for example: openssl rand -base64 48); FIRST_ADMIN_PASSWORD, if set, must be "
-                "a password of your own. ENVIRONMENT=development skips this check and is for "
-                "local use only."
+                "(for example: openssl rand -base64 48). ENVIRONMENT=development skips this "
+                "check and is for local use only."
             )
 
     def mcp_credentials_configured(self) -> bool:

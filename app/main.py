@@ -21,9 +21,10 @@ from app import __version__
 from app.api.deps import require_metrics_access
 from app.api.rate_limit import enforce_default_limit, limiter
 from app.api.routers import audit, auth, health, keys, projects, stats, users
-from app.core.config import get_settings
+from app.core.config import get_settings, is_placeholder
 from app.core.logging import configure_logging, get_logger
 from app.domain.exceptions import (
+    ConfigurationError,
     ConflictError,
     DecryptionError,
     DomainError,
@@ -88,9 +89,31 @@ async def _seed_first_admin() -> None:
     from app.application.services.auth_service import AuthService
     from app.infrastructure.db.repositories import UserRepository
 
+    # Outside local development the example password is not a password: judged here, and not at
+    # start-up, because it only matters while there is nobody to sign in.
+    placeholder_password = (
+        not settings.is_local_environment
+        and settings.first_admin_password is not None
+        and is_placeholder(settings.first_admin_password)
+    )
     async with SessionFactory() as session:
         if await UserRepository(session).count() != 0:
+            if placeholder_password:
+                logger.warning(
+                    "first_admin_password_ignored",
+                    detail=(
+                        "FIRST_ADMIN_PASSWORD is a placeholder from the example configuration; "
+                        "it is ignored because the installation already has users. Remove it "
+                        "from the environment"
+                    ),
+                )
             return
+        if placeholder_password:
+            raise ConfigurationError(
+                "Refusing to create the first administrator: FIRST_ADMIN_PASSWORD is a "
+                "placeholder from the example configuration. Set a password of your own "
+                "(see docs/deployment.md#first-administrator)"
+            )
         if not settings.first_admin_email or not settings.first_admin_password:
             logger.warning(
                 "bootstrap_admin_not_configured",

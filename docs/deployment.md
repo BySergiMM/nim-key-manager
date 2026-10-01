@@ -146,8 +146,9 @@ WARP) choose its address, so prefer the first.
 when the service starts. Unless `ENVIRONMENT` is `development` (also `dev`, `local`, `test`,
 `testing`; anything else counts as production, and so does leaving it unset) it refuses to start while
 one of them is empty, is a placeholder (the built-in defaults or the ones in `.env.example`) or is
-shorter than 32 characters. It also refuses an example `FIRST_ADMIN_PASSWORD`
-(`change-me-strong-password`, `admin-change-me`). The error names the variables and never prints a value.
+shorter than 32 characters. The error names the variables and never prints a value. An example
+`FIRST_ADMIN_PASSWORD` (`change-me-strong-password`, `admin-change-me`) is judged later, only when it
+would be used: see [First administrator](#first-administrator).
 
 - **Render**: nothing to do. `generateValue: true` produces "a randomized, base64-encoded, 256-bit
   value" ([blueprint spec](https://render.com/docs/blueprint-spec)): 44 characters.
@@ -171,6 +172,10 @@ first.) The first administrator is created by code that runs on the host:
 - **`python scripts/create_admin.py <email> <password> [full name]`**, from a checkout with
   `DATABASE_URL` and the secrets in the environment (the script is not part of the Docker image). It
   creates the first administrator while there are no users, or promotes an existing user.
+
+An example password (the one in `.env.example`) is refused outside `ENVIRONMENT=development` when it
+would create the first administrator, and ignored with the warning `first_admin_password_ignored`
+once users exist, so a value left over in the environment never stops a running installation.
 
 If there are no users and the variables are missing the service still starts, and the log says
 `bootstrap_admin_not_configured`: nobody can sign in until you set them and restart. Later

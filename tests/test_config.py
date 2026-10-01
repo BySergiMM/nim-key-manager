@@ -117,10 +117,16 @@ def test_the_metrics_token_is_checked_only_when_set():
     make_settings(metrics_token=secrets.token_urlsafe(48)).require_secure_secrets()
 
 
-def test_the_example_admin_password_is_refused_but_any_other_password_is_not_judged():
-    assert "FIRST_ADMIN_PASSWORD" in refusal(first_admin_password="change-me-strong-password")
-    assert "FIRST_ADMIN_PASSWORD" in refusal(first_admin_password="admin-change-me")
-    make_settings(first_admin_password="correct horse battery").require_secure_secrets()
+def test_the_start_up_check_does_not_judge_the_first_admin_password():
+    """It used to refuse an example FIRST_ADMIN_PASSWORD even on an installation that already
+    has users, so a value left over in the environment took a running service down on restart.
+    It is now judged where it matters: when it would create the administrator
+    (``tests/test_bootstrap.py``)."""
+    for password in ("change-me-strong-password", "admin-change-me", "correct horse battery"):
+        make_settings(first_admin_password=password).require_secure_secrets()
+    assert "FIRST_ADMIN_PASSWORD" not in refusal(
+        first_admin_password="change-me-strong-password", jwt_secret="short"
+    )
 
 
 # --------------------------------------------------------------------------- #
