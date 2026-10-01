@@ -18,6 +18,7 @@ from starlette.routing import Mount
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.domain.exceptions import ConfigurationError
+from app.mcp.identity import parse_allow_list
 
 logger = get_logger(__name__)
 
@@ -33,6 +34,29 @@ def _allowed_hosts(settings: Settings, base_url: str) -> list[str]:
         hosts.append(hostname)
     hosts += ["localhost", "127.0.0.1"]
     return hosts
+
+
+def _report_allow_list(settings: Settings) -> None:
+    """Say at start-up why nobody (or not everybody) can connect, instead of failing later."""
+    if not settings.mcp_auth_enabled:
+        return
+    allow = parse_allow_list(settings.mcp_allowed_identities)
+    if allow.ignored:
+        logger.warning(
+            "mcp_allow_list_entries_ignored",
+            entries=list(allow.ignored),
+            detail=(
+                "MCP_ALLOWED_IDENTITIES takes numeric account ids (GitHub user id, Google sub) "
+                "or e-mail addresses; a GitHub login is not accepted because it can be renamed "
+                "and then registered by somebody else "
+                "(see docs/connector.md#migrating-an-existing-allow-list)"
+            ),
+        )
+    if not (allow.ids or allow.emails):
+        logger.warning(
+            "mcp_allow_list_empty",
+            detail="MCP_ALLOWED_IDENTITIES has no usable entry, so nobody can use the connector",
+        )
 
 
 def mount_mcp_connector(api_app: Starlette, settings: Settings) -> Starlette:
@@ -58,6 +82,8 @@ def mount_mcp_connector(api_app: Starlette, settings: Settings) -> Starlette:
             ),
         )
         return api_app
+
+    _report_allow_list(settings)
 
     base_url = settings.resolve_public_base_url()
     if base_url is None:

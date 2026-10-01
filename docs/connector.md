@@ -24,7 +24,9 @@ proxy, then maps your identity to an application user so RBAC and the audit trai
 apply exactly as they do over REST.
 
 Only identities on the **allow-list** (`MCP_ALLOWED_IDENTITIES`) may use the
-connector. It is *fail-closed*: an empty list denies everyone.
+connector. It is *fail-closed*: an empty list denies everyone. Entries are stable
+account ids and e-mail addresses; GitHub **logins are not accepted** (see
+[below](#migrating-an-existing-allow-list)).
 
 ```
 Claude ──OAuth 2.1/PKCE──▶  ‹PUBLIC_BASE_URL›/authorize ──▶ GitHub/Google login
@@ -72,7 +74,7 @@ Environment**; they are already declared in `render.yaml` as
 | `MCP_AUTH_PROVIDER` | `github` (or `google`) |
 | `MCP_GITHUB_CLIENT_ID` / `MCP_GOOGLE_CLIENT_ID` | Client ID from Step 1 |
 | `MCP_GITHUB_CLIENT_SECRET` / `MCP_GOOGLE_CLIENT_SECRET` | Client Secret from Step 1 |
-| `MCP_ALLOWED_IDENTITIES` | Your GitHub login and/or e-mail, comma-separated (e.g. `your-login,you@example.com`) |
+| `MCP_ALLOWED_IDENTITIES` | Who may connect, comma-separated: your **numeric GitHub user id** (e.g. `98814441`; get it with `curl -s https://api.github.com/users/YOUR-LOGIN \| jq .id`) and/or an e-mail address. For Google: your verified e-mail, or the account's `sub` |
 
 Already set for you by the blueprint: `MCP_ENABLED=true`, `MCP_AUTH_ENABLED=true`,
 `MCP_OAUTH_JWT_SIGNING_KEY` (generated). Save and let the service redeploy. If the
@@ -82,12 +84,39 @@ stopping the service; a connector that has credentials but no public URL
 
 Optional hardening / convenience:
 
-- `MCP_DEFAULT_ROLE` (default `admin`) — role granted to an allow-listed identity
-  on first login. Set to `manager` or `viewer` to reduce what Claude can do.
+- `MCP_DEFAULT_ROLE` (default `viewer`) — role of the app user created for an
+  allow-listed identity on its first connection. A viewer can read key metadata but
+  cannot dispense, register or delete keys. Set `manager` (or `admin`) if you want
+  Claude to do more, or promote that user through the API (`PATCH /api/v1/users/{id}`).
 - `MCP_AUTO_PROVISION` (default `true`) — if `false`, the identity must already
   match an existing app user by e-mail.
 - `MCP_REDIS_URL` + `MCP_STORAGE_ENCRYPTION_KEY` — persist OAuth clients/tokens
   across restarts so you don't re-authorize after each redeploy (see Troubleshooting).
+
+### Migrating an existing allow-list
+
+Before this change the allow-list accepted GitHub **logins**, and the first connection
+created an **admin**. Both were unsafe: a login is not an identity (the owner can rename
+the account and anybody can then register the freed name, which passed the check), and an
+admin connector can dispense and delete every key.
+
+- **Logins no longer match.** At start-up the log says so
+  (`mcp_allow_list_entries_ignored`, listing the entries) and, if nothing usable is left,
+  `mcp_allow_list_empty`. Replace each login by the numeric id of that account:
+  `curl -s https://api.github.com/users/YOUR-LOGIN | jq .id`. E-mail entries keep working.
+  If you would rather have the service tell you: connect once from Claude, then read the
+  `mcp_identity_denied` line in the log; its `subject` is the id to add. (The person who is
+  denied is not told the id.)
+- **The default role is now `viewer`.** Users that already exist keep their role. Only the
+  users created from now on start as viewers. To give the connector more, set
+  `MCP_DEFAULT_ROLE=manager` before the first connection, or promote the user afterwards
+  with an admin token: `PATCH /api/v1/users/{id}` and `{"role": "manager"}` (see `/docs`).
+- **E-mail entries.** Google: an address only matches when Google reports it as verified
+  (`email_verified`). GitHub: the public profile e-mail matches (GitHub only lets you publish
+  one of your verified addresses; that is an inference from its documentation, the API does not
+  say so). An e-mail address can change hands, a numeric id cannot, so prefer ids. An
+  address the provider reports as unverified is never used to find the application user, so an
+  account cannot borrow somebody else's role by claiming their address.
 
 ## Step 3 — Verify the endpoints
 
@@ -141,8 +170,10 @@ dashboard or REST API.
 ## Security notes
 
 - **Allow-list first**: only `MCP_ALLOWED_IDENTITIES` can authenticate; empty = deny all.
-- **Least privilege**: set `MCP_DEFAULT_ROLE=viewer` or `manager` if you don't want
-  Claude to delete keys or read the audit log.
+  It matches stable account ids (and e-mails the provider vouches for), never logins.
+- **Least privilege**: users created by the connector are **viewers** unless you set
+  `MCP_DEFAULT_ROLE`; keep it at `viewer` or `manager` if you don't want Claude to
+  delete keys or read the audit log.
 - **Audit**: every dispense/register/rotate/revoke/delete is recorded with the
   acting user and is queryable via `list_audit`.
 - **Secrets**: keys are stored AES-256-GCM encrypted; only `dispense_key` ever
@@ -163,7 +194,9 @@ dashboard or REST API.
 - **Have to re-authorize after every redeploy** — by default OAuth clients/tokens are
   in memory. Set `MCP_REDIS_URL` and `MCP_STORAGE_ENCRYPTION_KEY` (a Fernet key) to
   persist them (`py-key-value-aio[redis]` is required for the Redis store).
-- **`identity is not allowed`** — add your GitHub login/e-mail to `MCP_ALLOWED_IDENTITIES`.
+- **`identity is not allowed`** — add your numeric account id (or e-mail) to
+  `MCP_ALLOWED_IDENTITIES`. A GitHub login does not work; the `mcp_identity_denied` log
+  line shows the id of the account that was refused.
 
 ## Local development (no OAuth)
 

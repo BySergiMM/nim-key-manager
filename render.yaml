@@ -64,4 +64,4 @@ services:
       - key: MCP_GITHUB_CLIENT_SECRET
         sync: false                    # from your GitHub OAuth App
       - key: MCP_ALLOWED_IDENTITIES
-        sync: false                    # your GitHub login and/or e-mail (comma-separated)
+        sync: false                    # your NUMERIC GitHub user id and/or e-mail (comma-separated); not a login

@@ -18,8 +18,8 @@
 ## Claude connector (MCP) security
 
 - The `/mcp` endpoint is protected by **OAuth 2.1** (Authorization Code + PKCE) via GitHub or Google. Claude cannot paste a bearer token — it must complete the OAuth flow.
-- An **allow-list** (`MCP_ALLOWED_IDENTITIES`) gates who may connect; it is **fail-closed** (empty = deny everyone).
-- The OAuth identity maps to an application user, so the same RBAC and audit apply. Set `MCP_DEFAULT_ROLE=viewer`/`manager` to reduce what the connector can do; user management is never exposed over MCP.
+- An **allow-list** (`MCP_ALLOWED_IDENTITIES`) gates who may connect; it is **fail-closed** (empty = deny everyone). It holds stable account ids (GitHub's numeric user id, Google's `sub`) and e-mail addresses the provider vouches for; GitHub logins are not accepted because a login can be renamed and then registered by somebody else. See [`connector.md`](connector.md#migrating-an-existing-allow-list).
+- The OAuth identity maps to an application user, so the same RBAC and audit apply. A user created by the connector is a **viewer** by default (`MCP_DEFAULT_ROLE`); raise it deliberately. User management is never exposed over MCP.
 - FastMCP issues its own short-lived JWTs to Claude and never forwards the upstream provider token; `Host`/`Origin` are validated.
 
 ## Key exposure surface

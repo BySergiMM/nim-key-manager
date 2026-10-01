@@ -105,11 +105,16 @@ class Settings(BaseSettings):
     mcp_redis_url: str | None = None
     mcp_storage_encryption_key: str | None = None
 
-    # Identity allow-list: GitHub logins and/or e-mails permitted to use the
-    # connector. Fail-closed: empty list denies everyone when auth is enabled.
+    # Identity allow-list: stable account ids (GitHub's numeric user id, Google's ``sub``)
+    # and/or e-mail addresses permitted to use the connector. GitHub logins are not accepted:
+    # they can be renamed and re-registered by somebody else. Fail-closed: an empty list
+    # denies everyone when auth is enabled.
     mcp_allowed_identities: Annotated[list[str], NoDecode] = []
     mcp_auto_provision: bool = True
-    mcp_default_role: Role = Role.ADMIN
+    # Role of a user created on first connection. Least privilege by default: a viewer cannot
+    # dispense, register or delete keys. Raise it deliberately (MCP_DEFAULT_ROLE) or promote
+    # the user through the API (PATCH /api/v1/users/{id}).
+    mcp_default_role: Role = Role.VIEWER
 
     # Host/Origin protection for the Streamable HTTP transport. Defaults derive
     # from ``public_base_url`` (plus loopback) when left empty.

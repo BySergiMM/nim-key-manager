@@ -20,7 +20,14 @@ from app.infrastructure.db.session import SessionFactory, engine
 from app.mcp import identity as identity_mod
 from app.mcp.asgi import mount_mcp_connector
 from app.mcp.auth import build_auth_provider
-from app.mcp.identity import Identity, is_allowed, resolve_actor, resolve_email
+from app.mcp.identity import (
+    Identity,
+    extract_identity,
+    is_allowed,
+    parse_allow_list,
+    resolve_actor,
+    resolve_email,
+)
 
 ADMIN_EMAIL = "admin@example.com"
 VIEWER_EMAIL = "viewer@example.com"
@@ -63,6 +70,14 @@ async def _seed_viewer() -> None:
         )
 
 
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict]] = []
+
+    def __getattr__(self, level: str):
+        return lambda event, **fields: self.events.append((level, event, fields))
+
+
 @pytest.fixture
 async def mcp_client(monkeypatch):
     """In-memory MCP client acting as the admin dev identity (auth disabled)."""
@@ -89,13 +104,86 @@ def test_resolve_email_falls_back_to_login_then_subject() -> None:
     assert resolve_email(Identity("sub-9", None, None, None)) == "sub-9@mcp.local"
 
 
+def test_resolve_email_ignores_an_address_the_provider_does_not_vouch_for() -> None:
+    unverified = Identity("sub-9", None, "admin@ex.com", None, email_verified=False)
+    assert resolve_email(unverified) == "sub-9@mcp.local"
+    assert resolve_email(Identity("sub-9", None, "admin@ex.com", None, email_verified=True)) == (
+        "admin@ex.com"
+    )
+
+
+def _settings(allowed: list[str], provider: str = "github"):
+    return get_settings().model_copy(
+        update={"mcp_allowed_identities": allowed, "mcp_auth_provider": provider}
+    )
+
+
 def test_is_allowed_matrix() -> None:
-    s = get_settings().model_copy(update={"mcp_allowed_identities": ["octocat", "me@ex.com"]})
-    assert is_allowed(Identity("1", "octocat", None, None), s) is True
-    assert is_allowed(Identity("1", None, "me@ex.com", None), s) is True
-    assert is_allowed(Identity("1", "stranger", "x@y.z", None), s) is False
-    empty = get_settings().model_copy(update={"mcp_allowed_identities": []})
-    assert is_allowed(Identity("1", "octocat", None, None), empty) is False
+    s = _settings(["98814441", "me@ex.com"])
+    assert is_allowed(Identity("98814441", "octocat", None, None), s) is True  # by account id
+    assert is_allowed(Identity("1", None, "me@ex.com", None), s) is True  # by e-mail
+    assert is_allowed(Identity("1", None, "ME@Ex.com", None), s) is True  # case-insensitive
+    assert is_allowed(Identity("2", "stranger", "x@y.z", None), s) is False
+    assert is_allowed(Identity("98814442", "octocat", None, None), s) is False  # other id
+    assert is_allowed(Identity("1", "octocat", None, None), _settings([])) is False  # fail-closed
+
+
+def test_a_github_login_never_matches() -> None:
+    """Logins are renamed and re-registered: the entry that used to work must not match."""
+    s = _settings(["octocat"])
+    assert is_allowed(Identity("98814441", "octocat", None, None), s) is False
+    # The old code also matched the e-mail it derived from the login.
+    s = _settings(["octocat@users.noreply.github.com"])
+    assert is_allowed(Identity("5", "octocat", None, None), s) is False
+
+
+def test_a_login_made_of_digits_does_not_pass_for_an_account_id() -> None:
+    """GitHub logins may be all digits: a numeric entry matches the account id only."""
+    s = _settings(["12345"])
+    assert is_allowed(Identity("999", "12345", None, None), s) is False
+    assert is_allowed(Identity("12345", "somebody", None, None), s) is True
+
+
+def test_google_emails_match_only_when_google_vouches_for_them() -> None:
+    s = _settings(["me@ex.com"], provider="google")
+    assert is_allowed(Identity("1", None, "me@ex.com", None, email_verified=True), s) is True
+    assert is_allowed(Identity("1", None, "me@ex.com", None, email_verified=False), s) is False
+    assert is_allowed(Identity("1", None, "me@ex.com", None), s) is False  # silence is not proof
+    # The numeric Google subject needs no such proof.
+    assert is_allowed(Identity("112233", None, None, None), _settings(["112233"], "google")) is True
+
+
+def test_a_github_email_is_refused_when_the_claim_says_it_is_unverified() -> None:
+    s = _settings(["me@ex.com"])
+    assert is_allowed(Identity("1", None, "me@ex.com", None, email_verified=False), s) is False
+
+
+def test_parse_allow_list_sorts_entries_by_what_they_can_match() -> None:
+    allow = parse_allow_list(
+        [" 123 ", "Me@Ex.com", "octocat", "@octocat", "two words", "", "   ", "١٢٣"]
+    )
+    assert allow.ids == {"123"}
+    assert allow.emails == {"me@ex.com"}
+    assert allow.ignored == ("octocat", "@octocat", "two words", "١٢٣")
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [(True, True), ("true", True), ("True", True), (False, False), ("false", False), (None, None)],
+)
+def test_extract_identity_reads_the_provider_claims(monkeypatch, claim, expected) -> None:
+    from fastmcp.server.auth.auth import AccessToken
+
+    token = AccessToken(
+        token="t", client_id="98814441", scopes=[],
+        claims={"sub": "98814441", "login": "octocat", "email": "o@ex.com",
+                "name": "Octo", "email_verified": claim},
+    )
+    monkeypatch.setattr("fastmcp.server.dependencies.get_access_token", lambda: token)
+    identity = extract_identity()
+    assert identity is not None
+    assert (identity.subject, identity.login, identity.email) == ("98814441", "octocat", "o@ex.com")
+    assert identity.email_verified is expected
 
 
 # --------------------------------------------------------------------------- #
@@ -107,13 +195,37 @@ async def test_resolve_actor_auto_provisions_allowed_identity(monkeypatch) -> No
     monkeypatch.setattr(identity_mod, "extract_identity",
                         lambda: Identity("42", "octocat", "octo@ex.com", "Octo"))
     settings = get_settings().model_copy(update={
-        "mcp_auth_enabled": True, "mcp_allowed_identities": ["octocat"],
+        "mcp_auth_enabled": True, "mcp_allowed_identities": ["42"],
         "mcp_auto_provision": True, "mcp_default_role": Role.MANAGER,
     })
     async with SessionFactory() as session:
         actor = await resolve_actor(session, settings)
         assert actor.email == "octo@ex.com"
-        assert actor.role == Role.MANAGER.value
+        assert actor.role == Role.MANAGER.value  # an explicit MCP_DEFAULT_ROLE is honored
+
+
+def test_the_default_role_of_a_provisioned_user_is_viewer() -> None:
+    from app.core.config import Settings
+
+    assert Settings.model_fields["mcp_default_role"].default == Role.VIEWER
+
+
+async def test_resolve_actor_provisions_a_viewer_unless_told_otherwise(monkeypatch) -> None:
+    """Auto-provisioned connector users used to be administrators."""
+    await _reset_db()
+    await _seed_admin()
+    monkeypatch.setattr(identity_mod, "extract_identity",
+                        lambda: Identity("42", "octocat", "octo@ex.com", "Octo"))
+    from app.core.config import Settings
+
+    # MCP_DEFAULT_ROLE is not exported, so this is the class default.
+    settings = Settings(
+        _env_file=None, mcp_auth_enabled=True, mcp_allowed_identities=["42"],
+        mcp_auto_provision=True,
+    )
+    async with SessionFactory() as session:
+        actor = await resolve_actor(session, settings)
+        assert actor.role == Role.VIEWER.value
 
 
 async def test_resolve_actor_returns_existing_user(monkeypatch) -> None:
@@ -129,17 +241,57 @@ async def test_resolve_actor_returns_existing_user(monkeypatch) -> None:
         assert actor.email == ADMIN_EMAIL and actor.role == Role.ADMIN.value
 
 
+async def test_an_unverified_address_does_not_lend_the_account_an_existing_users_role(
+    monkeypatch,
+) -> None:
+    """Allowed by account id, but claiming the administrator's address without Google's word."""
+    await _reset_db()
+    await _seed_admin()
+    monkeypatch.setattr(
+        identity_mod, "extract_identity",
+        lambda: Identity("77", None, ADMIN_EMAIL, "Mallory", email_verified=False),
+    )
+    settings = get_settings().model_copy(update={
+        "mcp_auth_enabled": True, "mcp_auth_provider": "google",
+        "mcp_allowed_identities": ["77"], "mcp_auto_provision": True,
+    })
+    async with SessionFactory() as session:
+        actor = await resolve_actor(session, settings)
+        assert actor.email == "77@mcp.local"  # not the administrator's row
+        assert actor.role == Role.VIEWER.value
+
+
 async def test_resolve_actor_rejects_unlisted_identity(monkeypatch) -> None:
     await _reset_db()
     await _seed_admin()
     monkeypatch.setattr(identity_mod, "extract_identity",
                         lambda: Identity("9", "stranger", "s@ex.com", None))
     settings = get_settings().model_copy(update={
-        "mcp_auth_enabled": True, "mcp_allowed_identities": ["octocat"],
+        "mcp_auth_enabled": True, "mcp_allowed_identities": ["42"],
     })
     async with SessionFactory() as session:
         with pytest.raises(PermissionDeniedError):
             await resolve_actor(session, settings)
+
+
+async def test_a_denied_identity_is_logged_with_its_account_id_but_not_told_it(monkeypatch) -> None:
+    """The operator needs the id to fill MCP_ALLOWED_IDENTITIES; the caller learns nothing."""
+    await _reset_db()
+    await _seed_admin()
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(identity_mod, "logger", recorder)
+    monkeypatch.setattr(identity_mod, "extract_identity",
+                        lambda: Identity("98814441", "octocat", "o@ex.com", None))
+    settings = get_settings().model_copy(update={
+        "mcp_auth_enabled": True, "mcp_allowed_identities": ["octocat"],  # a login: ignored
+    })
+    async with SessionFactory() as session:
+        with pytest.raises(PermissionDeniedError) as excinfo:
+            await resolve_actor(session, settings)
+    assert "98814441" not in str(excinfo.value)
+    [(level, event, fields)] = recorder.events
+    assert (level, event) == ("warning", "mcp_identity_denied")
+    assert fields["subject"] == "98814441" and fields["login"] == "octocat"
 
 
 async def test_resolve_actor_no_autoprovision_denies(monkeypatch) -> None:
@@ -148,7 +300,7 @@ async def test_resolve_actor_no_autoprovision_denies(monkeypatch) -> None:
     monkeypatch.setattr(identity_mod, "extract_identity",
                         lambda: Identity("7", "octocat", "octo@ex.com", None))
     settings = get_settings().model_copy(update={
-        "mcp_auth_enabled": True, "mcp_allowed_identities": ["octocat"],
+        "mcp_auth_enabled": True, "mcp_allowed_identities": ["7"],
         "mcp_auto_provision": False,
     })
     async with SessionFactory() as session:
@@ -327,14 +479,6 @@ def test_mount_requires_base_url_when_authenticated(monkeypatch) -> None:
         mount_mcp_connector(object(), settings)  # type: ignore[arg-type]
 
 
-class _RecordingLogger:
-    def __init__(self) -> None:
-        self.events: list[tuple[str, str, dict]] = []
-
-    def __getattr__(self, level: str):
-        return lambda event, **fields: self.events.append((level, event, fields))
-
-
 _NO_CREDENTIALS = {
     "mcp_enabled": True, "mcp_auth_enabled": True, "public_base_url": BASE_URL,
     "mcp_github_client_id": None, "mcp_github_client_secret": None,
@@ -420,3 +564,44 @@ def test_composed_app_serves_api_and_mounts_mcp(monkeypatch) -> None:
         assert tc.get("/health").status_code == 200
         assert tc.get("/").status_code == 200
         assert tc.get("/mcp").status_code != 404
+
+
+def _mountable(**overrides):
+    return get_settings().model_copy(update={
+        **_NO_CREDENTIALS, "mcp_auth_provider": "github",
+        "mcp_github_client_id": "cid", "mcp_github_client_secret": "secret", **overrides,
+    })
+
+
+def test_mount_warns_about_allow_list_entries_it_will_ignore(monkeypatch) -> None:
+    import app.mcp.asgi as asgi_mod
+    from app.main import create_app
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(asgi_mod, "logger", recorder)
+    mount_mcp_connector(create_app(), _mountable(mcp_allowed_identities=["octocat", "42"]))
+    [(level, event, fields)] = [e for e in recorder.events if "allow_list" in e[1]]
+    assert (level, event) == ("warning", "mcp_allow_list_entries_ignored")
+    assert fields["entries"] == ["octocat"]  # the id is fine, the login is not
+    assert "numeric" in fields["detail"]
+
+
+def test_mount_warns_when_nobody_can_connect(monkeypatch) -> None:
+    import app.mcp.asgi as asgi_mod
+    from app.main import create_app
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(asgi_mod, "logger", recorder)
+    mount_mcp_connector(create_app(), _mountable(mcp_allowed_identities=["octocat"]))
+    events = {event for _, event, _ in recorder.events}
+    assert {"mcp_allow_list_entries_ignored", "mcp_allow_list_empty"} <= events
+
+
+def test_mount_is_quiet_about_a_good_allow_list(monkeypatch) -> None:
+    import app.mcp.asgi as asgi_mod
+    from app.main import create_app
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(asgi_mod, "logger", recorder)
+    mount_mcp_connector(create_app(), _mountable(mcp_allowed_identities=["42", "me@ex.com"]))
+    assert not [e for e in recorder.events if "allow_list" in e[1]]
