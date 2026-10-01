@@ -20,13 +20,14 @@
 - The `/mcp` endpoint is protected by **OAuth 2.1** (Authorization Code + PKCE) via GitHub or Google. Claude cannot paste a bearer token — it must complete the OAuth flow.
 - An **allow-list** (`MCP_ALLOWED_IDENTITIES`) gates who may connect; it is **fail-closed** (empty = deny everyone). It holds stable account ids (GitHub's numeric user id, Google's `sub`) and e-mail addresses the provider vouches for; GitHub logins are not accepted because a login can be renamed and then registered by somebody else. See [`connector.md`](connector.md#migrating-an-existing-allow-list).
 - The OAuth identity maps to an application user, so the same RBAC and audit apply. A user created by the connector is a **viewer** by default (`MCP_DEFAULT_ROLE`); raise it deliberately. User management is never exposed over MCP.
+- `dispense_key` hands a plaintext key to the model, which is exactly the "private data" ingredient of the [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): combined in one conversation with untrusted content and a way to send data out, a prompt injection can make the model leak it. The tool is kept; its risk, the mitigations and their limits are written down in [`connector.md`](connector.md#dispense_key-and-the-lethal-trifecta). Every MCP tool carries MCP annotations (read-only / destructive / open-world hints); they are hints for clients, not enforcement.
 - FastMCP issues its own short-lived JWTs to Claude and never forwards the upstream provider token; `Host`/`Origin` are validated.
 
 ## Key exposure surface
 
 The plaintext key only ever exists:
 1. In memory during registration/validation/dispensing.
-2. In the response of `GET /api/v1/keys/dispense` and the `dispense_key` MCP tool (role `manager`+, rate-limited and audited).
+2. In the response of `GET /api/v1/keys/dispense` (role `manager`+, rate-limited and audited) and of the `dispense_key` MCP tool (role `manager`+ and audited; the REST rate limit does not apply to it). What the model does with a key it received over MCP is outside this service: see ["dispense_key" and the lethal trifecta](connector.md#dispense_key-and-the-lethal-trifecta).
 
 It is never written to logs (structured logging with no request bodies), never returned in listings, and never leaves via `/metrics`.
 

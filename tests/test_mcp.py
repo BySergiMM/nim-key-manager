@@ -356,6 +356,80 @@ async def test_tools_registered(mcp_client) -> None:
     assert len(names) == 19
 
 
+# --------------------------------------------------------------------------- #
+# tool annotations                                                             #
+# --------------------------------------------------------------------------- #
+READ_ONLY_TOOLS = {
+    "whoami", "list_keys", "get_key", "list_projects", "get_project",
+    "stats_overview", "usage_stats", "list_audit",
+}
+DESTRUCTIVE_TOOLS = {
+    "rotate_key", "revoke_key", "delete_key", "update_project", "delete_project",
+    "assign_key_to_project",
+}
+ASKS_NVIDIA = {"register_key", "validate_key"}
+
+
+async def _annotations(mcp_client) -> dict:
+    return {tool.name: tool.annotations for tool in await mcp_client.list_tools()}
+
+
+async def test_every_tool_declares_what_it_does_to_the_world(mcp_client) -> None:
+    annotations = await _annotations(mcp_client)
+    assert len(annotations) == 19
+    for name, hint in annotations.items():
+        assert hint is not None, name
+        assert hint.readOnlyHint is not None and hint.openWorldHint is not None, name
+        if not hint.readOnlyHint:
+            assert hint.destructiveHint is not None, name  # the spec's default would be True
+
+
+async def test_the_annotations_say_which_tools_read_destroy_or_reach_nvidia(mcp_client) -> None:
+    annotations = await _annotations(mcp_client)
+    assert {n for n, h in annotations.items() if h.readOnlyHint} == READ_ONLY_TOOLS
+    assert {n for n, h in annotations.items() if h.destructiveHint} == DESTRUCTIVE_TOOLS
+    assert {n for n, h in annotations.items() if h.openWorldHint} == ASKS_NVIDIA
+
+
+async def test_dispense_key_is_still_there_and_is_marked_as_a_write(mcp_client) -> None:
+    """It hands a plaintext key to the model: it is kept, and declared honestly."""
+    hint = (await _annotations(mcp_client))["dispense_key"]
+    assert hint.readOnlyHint is False and hint.destructiveHint is False
+    assert hint.openWorldHint is False
+
+
+async def _snapshot() -> dict[str, list]:
+    from sqlalchemy import select
+
+    async with SessionFactory() as session:
+        return {
+            table.name: sorted(
+                tuple(map(str, row)) for row in (await session.execute(select(table))).all()
+            )
+            for table in Base.metadata.sorted_tables
+        }
+
+
+async def test_the_tools_marked_read_only_change_nothing(mcp_client) -> None:
+    """The hint is only worth something if it is true: compare every table before and after."""
+    project = (await mcp_client.call_tool("create_project", {"name": "P"})).data
+    key = (await mcp_client.call_tool("register_key", {"name": "K", "api_key": _nvapi()})).data
+    arguments = {
+        "get_key": {"key_id": key.id},
+        "get_project": {"project_id": project.id},
+    }
+    before = await _snapshot()
+    for name in sorted(READ_ONLY_TOOLS):
+        await mcp_client.call_tool(name, arguments.get(name, {}))
+    assert await _snapshot() == before
+
+
+async def test_a_tool_marked_as_a_write_does_write(mcp_client) -> None:
+    before = await _snapshot()
+    await mcp_client.call_tool("register_key", {"name": "K", "api_key": _nvapi()})
+    assert await _snapshot() != before
+
+
 async def test_whoami(mcp_client) -> None:
     result = await mcp_client.call_tool("whoami", {})
     assert result.data.email == ADMIN_EMAIL

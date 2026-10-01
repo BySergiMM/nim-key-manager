@@ -68,6 +68,20 @@ PageSize = Annotated[int, Field(ge=1, le=500)]  # same as GET /audit
 PageOffset = Annotated[int, Field(ge=0, le=2**31 - 1)]  # beyond that SQL raises an overflow
 
 
+# Tool annotations (MCP ``readOnlyHint`` / ``destructiveHint`` / ``openWorldHint``) tell a client
+# how careful to be, so that it can ask a person before a consequential call. They are HINTS:
+# the MCP specification says clients must treat annotations as untrusted unless the server is,
+# and nothing here enforces them. What enforces access is the role check in ``tool_context``.
+# ``destructiveHint`` is set for a tool that deletes data, revokes or retires a key, or
+# overwrites a value a person set (a name, a description, a key's project); bookkeeping the
+# service does by itself (usage counters, ``last_validated_at``, audit entries) does not count.
+# ``idempotentHint`` is left at its default: every mutating tool appends an audit entry.
+_READS = {"readOnlyHint": True, "openWorldHint": False}
+_WRITES = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+_WRITES_AND_ASKS_NVIDIA = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True}
+_DESTROYS = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+
+
 def _parse_uuid(value: str, field: str) -> uuid.UUID:
     try:
         return uuid.UUID(value)
@@ -97,14 +111,14 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
     )
 
     # -- identity -----------------------------------------------------------
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def whoami() -> UserOut:
         """Return the authenticated user this connector acts as (id, e-mail, role)."""
         async with tool_context(Role.VIEWER) as (_session, actor):
             return UserOut.model_validate(actor)
 
     # -- keys ---------------------------------------------------------------
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def list_keys(
         project_id: ResourceId | None = None, status: StatusName | None = None
     ) -> list[KeyOut]:
@@ -116,14 +130,14 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             keys = await KeyService(session).list_keys(project_id=pid, status=status_value)
             return [KeyOut.from_model(key) for key in keys]
 
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def get_key(key_id: ResourceId) -> KeyOut:
         """Get a single API key's metadata by id (never returns the secret)."""
         kid = _parse_uuid(key_id, "key_id")
         async with tool_context(Role.VIEWER) as (session, _actor):
             return KeyOut.from_model(await KeyService(session).get(kid))
 
-    @mcp.tool
+    @mcp.tool(annotations=_WRITES)
     async def dispense_key(project_id: ResourceId | None = None) -> DispensedKey:
         """Return a ready-to-use API key (least-recently-used active key), globally
         or for a given project. This response contains the plaintext key; usage is
@@ -139,7 +153,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
                 api_key=plaintext,
             )
 
-    @mcp.tool
+    @mcp.tool(annotations=_WRITES_AND_ASKS_NVIDIA)
     async def register_key(
         name: Name,
         api_key: str,
@@ -163,7 +177,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             )
             return KeyOut.from_model(key)
 
-    @mcp.tool
+    @mcp.tool(annotations=_WRITES_AND_ASKS_NVIDIA)
     async def validate_key(key_id: ResourceId) -> KeyValidationOut:
         """Validate a stored key against NVIDIA's official read-only endpoint and
         update its status (active/invalid) accordingly. Requires the manager role."""
@@ -179,7 +193,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
                 detail=outcome.detail,
             )
 
-    @mcp.tool
+    @mcp.tool(annotations=_DESTROYS)
     async def rotate_key(
         key_id: ResourceId, new_api_key: str, expires_at: Timestamp | None = None
     ) -> KeyOut:
@@ -193,7 +207,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             )
             return KeyOut.from_model(replacement)
 
-    @mcp.tool
+    @mcp.tool(annotations=_DESTROYS)
     async def revoke_key(key_id: ResourceId) -> KeyOut:
         """Revoke an API key so it can no longer be dispensed. Destructive but
         reversible only by registering a new key. Requires the manager role."""
@@ -201,7 +215,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
         async with tool_context(Role.MANAGER) as (session, actor):
             return KeyOut.from_model(await KeyService(session).revoke(kid, actor=actor))
 
-    @mcp.tool
+    @mcp.tool(annotations=_DESTROYS)
     async def delete_key(key_id: ResourceId) -> dict[str, str]:
         """Permanently delete an API key and its usage records. Destructive and
         irreversible. Requires the admin role."""
@@ -210,7 +224,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             await KeyService(session).delete(kid, actor=actor)
             return {"status": "deleted", "key_id": str(kid)}
 
-    @mcp.tool
+    @mcp.tool(annotations=_WRITES)
     async def check_expirations() -> list[KeyOut]:
         """Scan active keys and mark those past their expiry date as expired.
         Returns the keys that were just expired. Requires the manager role."""
@@ -219,21 +233,21 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return [KeyOut.from_model(key) for key in expired]
 
     # -- projects -----------------------------------------------------------
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def list_projects() -> list[ProjectOut]:
         """List all projects that group keys by consumer/workload."""
         async with tool_context(Role.VIEWER) as (session, _actor):
             projects = await ProjectService(session).list_projects()
             return [ProjectOut.model_validate(project) for project in projects]
 
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def get_project(project_id: ResourceId) -> ProjectOut:
         """Get a single project by id."""
         pid = _parse_uuid(project_id, "project_id")
         async with tool_context(Role.VIEWER) as (session, _actor):
             return ProjectOut.model_validate(await ProjectService(session).get(pid))
 
-    @mcp.tool
+    @mcp.tool(annotations=_WRITES)
     async def create_project(name: Name, description: Description | None = None) -> ProjectOut:
         """Create a project to group API keys. Requires the manager role."""
         async with tool_context(Role.MANAGER) as (session, actor):
@@ -242,7 +256,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             )
             return ProjectOut.model_validate(project)
 
-    @mcp.tool
+    @mcp.tool(annotations=_DESTROYS)
     async def update_project(
         project_id: ResourceId,
         name: Name | None = None,
@@ -259,7 +273,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             project = await ProjectService(session).update(pid, changes, actor=actor)
             return ProjectOut.model_validate(project)
 
-    @mcp.tool
+    @mcp.tool(annotations=_DESTROYS)
     async def delete_project(project_id: ResourceId) -> dict[str, str]:
         """Delete a project (its keys are unassigned, not deleted). Destructive.
         Requires the manager role."""
@@ -268,7 +282,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             await ProjectService(session).delete(pid, actor=actor)
             return {"status": "deleted", "project_id": str(pid)}
 
-    @mcp.tool
+    @mcp.tool(annotations=_DESTROYS)
     async def assign_key_to_project(project_id: ResourceId, key_id: ResourceId) -> KeyOut:
         """Attach an existing API key to a project. Requires the manager role."""
         pid = _parse_uuid(project_id, "project_id")
@@ -278,21 +292,21 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return KeyOut.from_model(key)
 
     # -- stats & audit ------------------------------------------------------
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def stats_overview() -> StatsOverview:
         """Inventory and usage summary: totals by status, keys expiring soon,
         dispenses, users and projects."""
         async with tool_context(Role.VIEWER) as (session, _actor):
             return StatsOverview.model_validate(await StatsService(session).overview())
 
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def usage_stats(days: Days = 30) -> list[UsagePoint]:
         """Daily dispense counts over the last N days (default 30)."""
         async with tool_context(Role.VIEWER) as (session, _actor):
             points = await StatsService(session).usage_timeseries(days=days)
             return [UsagePoint.model_validate(point) for point in points]
 
-    @mcp.tool
+    @mcp.tool(annotations=_READS)
     async def list_audit(
         limit: PageSize = 100, offset: PageOffset = 0, action: AuditAction | None = None
     ) -> list[AuditOut]:
