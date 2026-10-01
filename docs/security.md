@@ -32,7 +32,7 @@ It is never written to logs (structured logging with no request bodies), never r
 
 ## Other measures
 
-- **Rate limiting** per IP (slowapi): global, login and dispensing with independent limits.
+- **Rate limiting** per client address (slowapi). `RATE_LIMIT_DEFAULT` (120/minute) applies to every API and dashboard route that has no limit of its own, counted per address and URL path; login (`RATE_LIMIT_AUTH`) and dispensing (`RATE_LIMIT_DISPENSE`) have their own, independent limits; `/health` is exempt because the platform probes it and restarts the instance when the probe fails. Over the limit the answer is `429`. The address is the one described in [`deployment.md`](deployment.md#client-ip-and-proxy-headers). The connector's own endpoints (`/mcp` and the OAuth endpoints) are not covered by these limits.
 - **Immutable audit**: actor, action, resource, IP and detail of every sensitive operation (login, key register/rotate/revoke/dispense, user and project changes).
 - **Dashboard hardening**: the dashboard is a static page that renders every API value (key and project names, audit actors, IP addresses…) as text with `textContent`, never as HTML, and it is served with a strict `Content-Security-Policy` (`default-src 'self'`, no inline script or style, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`). A hostile key or project name therefore cannot run script in an administrator's browser.
 - **`X-Request-ID` header** and per-request correlated JSON logging.

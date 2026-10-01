@@ -29,6 +29,7 @@ import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 from app.api.deps import get_key_validator  # noqa: E402
+from app.api.rate_limit import limiter  # noqa: E402
 from app.application.interfaces import KeyValidationOutcome  # noqa: E402
 from app.domain.enums import KeyCheckResult  # noqa: E402
 from app.infrastructure.db.models import Base  # noqa: E402
@@ -70,6 +71,17 @@ async def client(fake_validator: FakeValidator):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as http:
         yield http
+
+
+@pytest.fixture
+def rate_limiting(client: AsyncClient):
+    """Turn the rate limiter on (the test environment disables it) with clean counters."""
+    previous = limiter.enabled
+    limiter.enabled = True
+    limiter.reset()
+    yield
+    limiter.enabled = previous
+    limiter.reset()
 
 
 @pytest.fixture

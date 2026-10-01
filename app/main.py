@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import structlog
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -18,7 +18,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.applications import Starlette
 
 from app import __version__
-from app.api.rate_limit import limiter
+from app.api.rate_limit import enforce_default_limit, limiter
 from app.api.routers import audit, auth, health, keys, projects, stats, users
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
@@ -135,6 +135,8 @@ def create_app() -> FastAPI:
             "assisted rotation, expiry detection, usage statistics, RBAC and audit."
         ),
         lifespan=lifespan,
+        # RATE_LIMIT_DEFAULT: the limit of every route that has no @limiter.limit of its own.
+        dependencies=[Depends(enforce_default_limit)],
     )
 
     app.add_middleware(

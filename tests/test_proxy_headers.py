@@ -21,7 +21,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from uvicorn import Config
 
-from app.api.rate_limit import limiter
 from app.core.config import get_settings
 from app.main import create_app
 
@@ -74,17 +73,6 @@ def render_forwarded_allow_ips() -> str:
     match = re.search(r'-\s+key:\s+FORWARDED_ALLOW_IPS\s*\n\s+value:\s*"([^"]+)"', text)
     assert match, "render.yaml must set FORWARDED_ALLOW_IPS for the Render deployment"
     return match.group(1)
-
-
-@pytest.fixture
-def rate_limiting(client):
-    """Turn the rate limiter on (the test environment disables it) with clean counters."""
-    previous = limiter.enabled
-    limiter.enabled = True
-    limiter.reset()
-    yield
-    limiter.enabled = previous
-    limiter.reset()
 
 
 # --------------------------------------------------------------------------- #
