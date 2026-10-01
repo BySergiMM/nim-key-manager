@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Annotated
 
 from fastmcp import FastMCP
+from pydantic import Field
 
 from app import __version__
 from app.api.schemas import (
@@ -43,6 +45,27 @@ SERVER_INSTRUCTIONS = (
     "assisted: you generate the key at build.nvidia.com and provide it here. "
     "Every operation is authenticated, role-checked and audited."
 )
+
+
+# Bounds on what a tool accepts. They are the ones the REST API enforces (app/api/schemas.py and
+# the Query parameters of the routers) plus the widths of the database columns: a connector
+# tool used to take whatever a client sent, so a 1 MB project name, a negative or enormous
+# page size (``limit=-1`` returns the whole audit table on SQLite) or ``days=-5`` went through
+# where REST answers 422. FastMCP validates the arguments against these before the tool runs
+# and publishes them in the tool's input schema.
+#
+# The API key arguments (``api_key``, ``new_api_key``) are deliberately NOT constrained here:
+# when an argument fails validation FastMCP logs the rejected value, and a key must never reach
+# the logs. KeyService checks their length (and prefix) itself, without echoing them.
+ResourceId = Annotated[str, Field(min_length=1, max_length=64)]  # a UUID is 36 characters
+Name = Annotated[str, Field(min_length=1, max_length=120)]  # key / project name: String(120)
+Description = Annotated[str, Field(max_length=2000)]  # REST leaves it unbounded (Text)
+Timestamp = Annotated[str, Field(max_length=64)]  # ISO-8601
+StatusName = Annotated[str, Field(max_length=20)]  # api_keys.status (String(20))
+AuditAction = Annotated[str, Field(max_length=60)]  # audit_logs.action (String(60))
+Days = Annotated[int, Field(ge=1, le=365)]  # same as GET /stats/usage
+PageSize = Annotated[int, Field(ge=1, le=500)]  # same as GET /audit
+PageOffset = Annotated[int, Field(ge=0, le=2**31 - 1)]  # beyond that SQL raises an overflow
 
 
 def _parse_uuid(value: str, field: str) -> uuid.UUID:
@@ -83,7 +106,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
     # -- keys ---------------------------------------------------------------
     @mcp.tool
     async def list_keys(
-        project_id: str | None = None, status: str | None = None
+        project_id: ResourceId | None = None, status: StatusName | None = None
     ) -> list[KeyOut]:
         """List API keys, optionally filtered by project id and/or status
         (active, expired, revoked, invalid)."""
@@ -94,14 +117,14 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return [KeyOut.from_model(key) for key in keys]
 
     @mcp.tool
-    async def get_key(key_id: str) -> KeyOut:
+    async def get_key(key_id: ResourceId) -> KeyOut:
         """Get a single API key's metadata by id (never returns the secret)."""
         kid = _parse_uuid(key_id, "key_id")
         async with tool_context(Role.VIEWER) as (session, _actor):
             return KeyOut.from_model(await KeyService(session).get(kid))
 
     @mcp.tool
-    async def dispense_key(project_id: str | None = None) -> DispensedKey:
+    async def dispense_key(project_id: ResourceId | None = None) -> DispensedKey:
         """Return a ready-to-use API key (least-recently-used active key), globally
         or for a given project. This response contains the plaintext key; usage is
         recorded and audited. Requires the manager role."""
@@ -118,10 +141,10 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
 
     @mcp.tool
     async def register_key(
-        name: str,
+        name: Name,
         api_key: str,
-        project_id: str | None = None,
-        expires_at: str | None = None,
+        project_id: ResourceId | None = None,
+        expires_at: Timestamp | None = None,
         validate_remote: bool = False,
     ) -> KeyOut:
         """Register a key you created at build.nvidia.com (must start with 'nvapi-').
@@ -141,7 +164,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return KeyOut.from_model(key)
 
     @mcp.tool
-    async def validate_key(key_id: str) -> KeyValidationOut:
+    async def validate_key(key_id: ResourceId) -> KeyValidationOut:
         """Validate a stored key against NVIDIA's official read-only endpoint and
         update its status (active/invalid) accordingly. Requires the manager role."""
         kid = _parse_uuid(key_id, "key_id")
@@ -158,7 +181,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
 
     @mcp.tool
     async def rotate_key(
-        key_id: str, new_api_key: str, expires_at: str | None = None
+        key_id: ResourceId, new_api_key: str, expires_at: Timestamp | None = None
     ) -> KeyOut:
         """Assisted rotation: register a replacement key you generated at
         build.nvidia.com and atomically revoke the old one (lineage preserved).
@@ -171,7 +194,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return KeyOut.from_model(replacement)
 
     @mcp.tool
-    async def revoke_key(key_id: str) -> KeyOut:
+    async def revoke_key(key_id: ResourceId) -> KeyOut:
         """Revoke an API key so it can no longer be dispensed. Destructive but
         reversible only by registering a new key. Requires the manager role."""
         kid = _parse_uuid(key_id, "key_id")
@@ -179,7 +202,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return KeyOut.from_model(await KeyService(session).revoke(kid, actor=actor))
 
     @mcp.tool
-    async def delete_key(key_id: str) -> dict[str, str]:
+    async def delete_key(key_id: ResourceId) -> dict[str, str]:
         """Permanently delete an API key and its usage records. Destructive and
         irreversible. Requires the admin role."""
         kid = _parse_uuid(key_id, "key_id")
@@ -204,14 +227,14 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return [ProjectOut.model_validate(project) for project in projects]
 
     @mcp.tool
-    async def get_project(project_id: str) -> ProjectOut:
+    async def get_project(project_id: ResourceId) -> ProjectOut:
         """Get a single project by id."""
         pid = _parse_uuid(project_id, "project_id")
         async with tool_context(Role.VIEWER) as (session, _actor):
             return ProjectOut.model_validate(await ProjectService(session).get(pid))
 
     @mcp.tool
-    async def create_project(name: str, description: str | None = None) -> ProjectOut:
+    async def create_project(name: Name, description: Description | None = None) -> ProjectOut:
         """Create a project to group API keys. Requires the manager role."""
         async with tool_context(Role.MANAGER) as (session, actor):
             project = await ProjectService(session).create(
@@ -221,7 +244,9 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
 
     @mcp.tool
     async def update_project(
-        project_id: str, name: str | None = None, description: str | None = None
+        project_id: ResourceId,
+        name: Name | None = None,
+        description: Description | None = None,
     ) -> ProjectOut:
         """Update a project's name and/or description. Requires the manager role."""
         pid = _parse_uuid(project_id, "project_id")
@@ -235,7 +260,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return ProjectOut.model_validate(project)
 
     @mcp.tool
-    async def delete_project(project_id: str) -> dict[str, str]:
+    async def delete_project(project_id: ResourceId) -> dict[str, str]:
         """Delete a project (its keys are unassigned, not deleted). Destructive.
         Requires the manager role."""
         pid = _parse_uuid(project_id, "project_id")
@@ -244,7 +269,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return {"status": "deleted", "project_id": str(pid)}
 
     @mcp.tool
-    async def assign_key_to_project(project_id: str, key_id: str) -> KeyOut:
+    async def assign_key_to_project(project_id: ResourceId, key_id: ResourceId) -> KeyOut:
         """Attach an existing API key to a project. Requires the manager role."""
         pid = _parse_uuid(project_id, "project_id")
         kid = _parse_uuid(key_id, "key_id")
@@ -261,7 +286,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
             return StatsOverview.model_validate(await StatsService(session).overview())
 
     @mcp.tool
-    async def usage_stats(days: int = 30) -> list[UsagePoint]:
+    async def usage_stats(days: Days = 30) -> list[UsagePoint]:
         """Daily dispense counts over the last N days (default 30)."""
         async with tool_context(Role.VIEWER) as (session, _actor):
             points = await StatsService(session).usage_timeseries(days=days)
@@ -269,7 +294,7 @@ def build_mcp_server(settings: Settings, base_url: str) -> FastMCP:
 
     @mcp.tool
     async def list_audit(
-        limit: int = 100, offset: int = 0, action: str | None = None
+        limit: PageSize = 100, offset: PageOffset = 0, action: AuditAction | None = None
     ) -> list[AuditOut]:
         """List immutable audit entries (most recent first), optionally filtered by
         action (e.g. 'key.dispensed'). Requires the admin role."""

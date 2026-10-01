@@ -399,6 +399,107 @@ async def test_register_key_bad_uuid(mcp_client) -> None:
         await mcp_client.call_tool("get_key", {"key_id": "not-a-uuid"})
 
 
+# --------------------------------------------------------------------------- #
+# argument bounds                                                              #
+# --------------------------------------------------------------------------- #
+# The tools used to accept whatever a client sent: a 1 MB project name, ``days=-5``, a negative
+# or enormous page size (``limit=-1`` returned the whole audit table on SQLite), a 100 KB key.
+# The REST API answers 422 to all of those; the tools now apply the same bounds.
+SOME_ID = "6f1c0d2e-9a7b-4c3d-8e5f-1a2b3c4d5e6f"
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("usage_stats", {"days": 0}),
+        ("usage_stats", {"days": -5}),
+        ("usage_stats", {"days": 366}),
+        ("usage_stats", {"days": 10**9}),
+        ("list_audit", {"limit": 0}),
+        ("list_audit", {"limit": -1}),
+        ("list_audit", {"limit": 501}),
+        ("list_audit", {"limit": 10**9}),
+        ("list_audit", {"offset": -1}),
+        ("list_audit", {"offset": 2**31}),
+        ("list_audit", {"action": "a" * 61}),
+        ("create_project", {"name": ""}),
+        ("create_project", {"name": "n" * 121}),
+        ("create_project", {"name": "n" * 1_000_000}),
+        ("create_project", {"name": "ok", "description": "d" * 2001}),
+        ("update_project", {"project_id": SOME_ID, "name": ""}),
+        ("update_project", {"project_id": SOME_ID, "description": "d" * 2001}),
+        ("register_key", {"name": "", "api_key": "nvapi-" + "a" * 40}),
+        ("register_key", {"name": "n" * 121, "api_key": "nvapi-" + "a" * 40}),
+        ("register_key", {"name": "k", "api_key": "nvapi-" + "a" * 40, "expires_at": "2" * 65}),
+        ("register_key", {"name": "k", "api_key": "nvapi-" + "a" * 507}),  # 513 characters
+        ("register_key", {"name": "k", "api_key": "nvapi-short"}),
+        ("list_keys", {"status": "s" * 21}),
+        ("list_keys", {"project_id": "f" * 65}),
+        ("get_key", {"key_id": "f" * 65}),
+        ("get_key", {"key_id": ""}),
+        ("dispense_key", {"project_id": "f" * 65}),
+    ],
+)
+async def test_out_of_range_arguments_are_rejected(mcp_client, tool, arguments) -> None:
+    with pytest.raises(ToolError):
+        await mcp_client.call_tool(tool, arguments)
+
+
+async def test_a_rejected_call_changes_nothing(mcp_client) -> None:
+    for tool, arguments in (
+        ("create_project", {"name": "n" * 121}),
+        ("register_key", {"name": "n" * 121, "api_key": _nvapi()}),
+        ("register_key", {"name": "k", "api_key": "nvapi-" + "a" * 507}),
+    ):
+        with pytest.raises(ToolError):
+            await mcp_client.call_tool(tool, arguments)
+    assert (await mcp_client.call_tool("list_projects", {})).data == []
+    assert (await mcp_client.call_tool("list_keys", {})).data == []
+
+
+async def test_the_documented_limits_themselves_are_accepted(mcp_client) -> None:
+    await mcp_client.call_tool("usage_stats", {"days": 1})
+    await mcp_client.call_tool("usage_stats", {"days": 365})
+    await mcp_client.call_tool("list_audit", {"limit": 1, "offset": 0})
+    await mcp_client.call_tool("list_audit", {"limit": 500, "offset": 2**31 - 1})
+    project = await mcp_client.call_tool(
+        "create_project", {"name": "n" * 120, "description": "d" * 2000}
+    )
+    assert len(project.data.name) == 120
+    key = await mcp_client.call_tool(
+        "register_key", {"name": "k" * 120, "api_key": "nvapi-" + "a" * 506}  # 512 characters
+    )
+    assert key.data.status == "active"
+
+
+async def test_the_bounds_are_published_in_the_tool_schemas(mcp_client) -> None:
+    tools = await mcp_client.list_tools()
+    schemas = {tool.name: tool.inputSchema["properties"] for tool in tools}
+    days = schemas["usage_stats"]["days"]
+    assert (days["minimum"], days["maximum"]) == (1, 365)
+    assert schemas["list_audit"]["limit"]["maximum"] == 500
+    assert schemas["create_project"]["name"]["maxLength"] == 120
+
+
+async def test_a_rejected_api_key_is_never_echoed_or_logged(mcp_client, capfd, caplog) -> None:
+    """FastMCP logs the value of an argument that fails validation, so the key arguments are
+    checked by KeyService (which never echoes them) and not by pydantic constraints."""
+    marker = "S3CRETMARKER"
+    registered = await mcp_client.call_tool("register_key", {"name": "K", "api_key": _nvapi()})
+    attempts = (
+        ("register_key", {"name": "k", "api_key": "nvapi-" + marker}),  # too short
+        ("register_key", {"name": "k", "api_key": "nvapi-" + marker * 50}),  # too long
+        ("rotate_key", {"key_id": registered.data.id, "new_api_key": "nvapi-" + marker * 50}),
+        ("rotate_key", {"key_id": registered.data.id, "new_api_key": marker}),  # no prefix
+    )
+    for tool, arguments in attempts:
+        with pytest.raises(ToolError) as excinfo:
+            await mcp_client.call_tool(tool, arguments)
+        assert marker not in str(excinfo.value)
+    captured = capfd.readouterr()
+    assert marker not in captured.out + captured.err + caplog.text
+
+
 async def test_project_lifecycle_and_assignment(mcp_client) -> None:
     proj = await mcp_client.call_tool("create_project", {"name": "P", "description": "d"})
     pid = proj.data.id

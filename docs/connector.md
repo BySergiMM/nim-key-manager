@@ -167,6 +167,13 @@ You can now ask things like *"dispense an available NVIDIA key for project X"* o
 User management is intentionally **not** exposed over MCP; manage users via the
 dashboard or REST API.
 
+**Argument limits.** The tools reject out-of-range arguments before they run, with the same
+bounds as the REST API (and they are published in each tool's input schema): `usage_stats`
+`days` 1–365; `list_audit` `limit` 1–500, `offset` 0 to 2,147,483,647, `action` up to 60
+characters; key and project `name` 1–120 characters; project `description` up to 2,000;
+ids up to 64 characters; `expires_at` up to 64; API keys 20–512 characters starting with
+`nvapi-`. A rejected key is never echoed back or logged.
+
 ## Security notes
 
 - **Allow-list first**: only `MCP_ALLOWED_IDENTITIES` can authenticate; empty = deny all.
