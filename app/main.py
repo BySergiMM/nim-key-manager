@@ -18,6 +18,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.applications import Starlette
 
 from app import __version__
+from app.api.deps import require_metrics_access
 from app.api.rate_limit import enforce_default_limit, limiter
 from app.api.routers import audit, auth, health, keys, projects, stats, users
 from app.core.config import get_settings
@@ -199,7 +200,13 @@ def create_app() -> FastAPI:
             instrumentator.instrument(app)
         except ValueError:  # collectors already registered (multiple apps per process)
             logger.warning("metrics_already_registered")
-    instrumentator.expose(app, endpoint="/metrics", include_in_schema=False)
+    # Not public: METRICS_TOKEN for a scraper, or an administrator's access token.
+    instrumentator.expose(
+        app,
+        endpoint="/metrics",
+        include_in_schema=False,
+        dependencies=[Depends(require_metrics_access)],
+    )
 
     for router in (
         health.router,

@@ -109,6 +109,14 @@ def test_optional_secrets_are_checked_only_when_set():
     make_settings(mcp_oauth_jwt_signing_key=secrets.token_urlsafe(48)).require_secure_secrets()
 
 
+def test_the_metrics_token_is_checked_only_when_set():
+    assert Settings(_env_file=None, metrics_token="").metrics_token is None  # blank = unset
+    make_settings().require_secure_secrets()
+    assert "METRICS_TOKEN" in refusal(metrics_token="short")
+    assert "METRICS_TOKEN" in refusal(metrics_token="change-me-" * 4)
+    make_settings(metrics_token=secrets.token_urlsafe(48)).require_secure_secrets()
+
+
 def test_the_example_admin_password_is_refused_but_any_other_password_is_not_judged():
     assert "FIRST_ADMIN_PASSWORD" in refusal(first_admin_password="change-me-strong-password")
     assert "FIRST_ADMIN_PASSWORD" in refusal(first_admin_password="admin-change-me")

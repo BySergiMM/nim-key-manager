@@ -59,8 +59,10 @@ class Settings(BaseSettings):
     nvidia_request_timeout_seconds: float = 10.0
 
     # Observability
-    # instrument() adds per-request Prometheus metrics; /metrics is always exposed.
+    # instrument() adds per-request Prometheus metrics. /metrics is always exposed but needs
+    # an administrator's access token or, for a scraper, this bearer token (unset = admin only).
     metrics_enabled: bool = True
+    metrics_token: str | None = None
 
     # Rate limiting
     rate_limit_enabled: bool = True
@@ -148,6 +150,7 @@ class Settings(BaseSettings):
         "mcp_redis_url",
         "mcp_storage_encryption_key",
         "mcp_dev_identity",
+        "metrics_token",
         mode="before",
     )
     @classmethod
@@ -207,6 +210,8 @@ class Settings(BaseSettings):
                 self.mcp_oauth_jwt_signing_key,
                 minimum=MIN_SECRET_LENGTH,
             )
+        if self.metrics_token is not None:
+            check("METRICS_TOKEN", self.metrics_token, minimum=MIN_SECRET_LENGTH)
         if self.first_admin_password is not None and is_placeholder(self.first_admin_password):
             problems.append("FIRST_ADMIN_PASSWORD is a placeholder from the example configuration")
         return problems

@@ -46,7 +46,7 @@ Full guide (Google, tool reference, security, troubleshooting): [`docs/connector
 - **Statistics** — inventory by status, dispenses, usage time series.
 - **Security** — JWT (access + refresh), roles `admin`/`manager`/`viewer`, rate limiting, immutable audit of every sensitive operation.
 - **Claude connector (MCP)** — OAuth-secured MCP server at `/mcp` (see above).
-- **Operations** — structured JSON logging, Prometheus metrics at `/metrics`, health check at `/health`, OpenAPI at `/docs`.
+- **Operations** — structured JSON logging, Prometheus metrics at `/metrics` (behind an admin token or `METRICS_TOKEN`), health check at `/health`, OpenAPI at `/docs`.
 
 ## Architecture
 

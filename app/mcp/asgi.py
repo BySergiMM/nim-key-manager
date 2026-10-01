@@ -4,8 +4,10 @@ The FastMCP HTTP app keeps its own middleware stack (OAuth authentication, host
 protection) so the ``/mcp`` endpoint stays protected and the OAuth discovery
 routes live at the domain root. The existing FastAPI application is attached as a
 catch-all mount, so ``/``, ``/api/v1/*``, ``/health`` and ``/metrics`` are served
-unchanged and unauthenticated by the MCP layer. Both lifespans run via
-``combine_lifespans`` (MCP session manager + database/scheduler startup).
+unchanged: the MCP layer adds no authentication of its own to them, and each keeps the
+access rules of the FastAPI app (``/metrics`` needs ``METRICS_TOKEN`` or an administrator).
+Both lifespans run via ``combine_lifespans`` (MCP session manager + database/scheduler
+startup).
 """
 
 from __future__ import annotations

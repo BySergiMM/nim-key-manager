@@ -10,7 +10,7 @@
 4. Wait for the first deploy. The public URL exposes:
    - Dashboard: `/`
    - OpenAPI: `/docs`
-   - Health: `/health` · Prometheus metrics: `/metrics`
+   - Health: `/health` · Prometheus metrics: `/metrics` (needs an admin token or `METRICS_TOKEN`)
    - Claude MCP connector: `/mcp` (see [`connector.md`](connector.md))
 
 What the blueprint automates:
@@ -37,7 +37,19 @@ Recommendation: disable "Auto-Deploy" in Render and use the hook so no broken co
 ## Monitoring and logs
 
 - **Logs**: structured JSON (structlog) to stdout → Render's log viewer (or any aggregator: Datadog, Grafana Loki…). Every line includes `request_id`, path, status and duration.
-- **Metrics**: `/metrics` in Prometheus format (latencies, status codes, throughput per handler). Compatible with Grafana Cloud / remote Prometheus.
+- **Metrics**: `/metrics` in Prometheus format (latencies, status codes, throughput per handler). Compatible with Grafana Cloud / remote Prometheus. It is **not public**: it answers `401` without credentials. Set `METRICS_TOKEN` (a random value of at least 32 characters, e.g. `openssl rand -base64 48`) and let the scraper send it as a bearer token; an administrator's access token works too, so `curl -H "Authorization: Bearer $TOKEN" $BASE/metrics` is enough for a manual look. Without `METRICS_TOKEN` only administrators can read it.
+
+  ```yaml
+  # prometheus.yml
+  scrape_configs:
+    - job_name: nim-key-manager
+      scheme: https
+      metrics_path: /metrics
+      authorization:
+        credentials: <METRICS_TOKEN>      # or credentials_file: /etc/prometheus/nkm-token
+      static_configs:
+        - targets: ["your-service.onrender.com"]
+  ```
 - **Health**: `/health` checks the database connection.
 - **Jobs**: expiry (hourly) and the NVIDIA validation sweep (every 6 h) record results in logs and the audit trail.
 
