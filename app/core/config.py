@@ -73,8 +73,10 @@ class Settings(BaseSettings):
     validation_interval_hours: int = 6
     expiry_warning_days: int = 7
 
-    # CORS
-    cors_origins: list[str] = ["*"]
+    # CORS: origins (JSON list) allowed to call the API from a browser. None by default: the
+    # dashboard is served by this same service and needs no CORS. "*" is accepted but is
+    # never combined with credentials (see create_app).
+    cors_origins: list[str] = []
 
     # ------------------------------------------------------------------
     # MCP connector (Claude custom connector)

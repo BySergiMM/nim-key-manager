@@ -153,10 +153,15 @@ def create_app() -> FastAPI:
         dependencies=[Depends(enforce_default_limit)],
     )
 
+    # No origin is allowed unless CORS_ORIGINS lists it. A "*" is never combined with
+    # credentials: Starlette answers a credentialed request from any origin by echoing that
+    # origin back with ``Access-Control-Allow-Credentials: true``, so "*" plus credentials
+    # would mean "every website, with credentials". Starlette's own documentation says
+    # the wildcards cannot be used where credentials are allowed.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_credentials=True,
+        allow_credentials="*" not in settings.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )

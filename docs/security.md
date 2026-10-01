@@ -38,7 +38,8 @@ It is never written to logs (structured logging with no request bodies), never r
 - **Secrets are checked at start-up.** Outside `ENVIRONMENT=development` the service refuses to start if `JWT_SECRET` or `ENCRYPTION_MASTER_KEY` (or `MCP_OAUTH_JWT_SIGNING_KEY`, when set) is empty, a placeholder from the examples, or shorter than 32 characters, and if `FIRST_ADMIN_PASSWORD` is an example placeholder. Without it the built-in defaults would make the stored ciphertext decryptable and the session tokens forgeable by anyone who has read the repository. See [`deployment.md`](deployment.md#secrets).
 - **`X-Request-ID` header** and per-request correlated JSON logging.
 - **Non-root** container, slim multi-stage image, no secrets baked into the image.
-- Configurable CORS. Real client IPs behind a proxy come from `X-Forwarded-For`, which uvicorn believes only from the peers listed in `FORWARDED_ALLOW_IPS` (default `127.0.0.1`, never `*`) and reads from the right; see [`deployment.md`](deployment.md#client-ip-and-proxy-headers).
+- **CORS is closed by default.** `CORS_ORIGINS` (a JSON list, e.g. `["https://app.example.com"]`) is empty unless you set it: the dashboard is served by this same service and needs no CORS. Listed origins may send credentials; a `"*"` entry is honoured but then credentials are not allowed, because Starlette would otherwise answer a credentialed request from any website by echoing its origin back with `Access-Control-Allow-Credentials: true`. (The previous default was `["*"]` with credentials, which behaved exactly like that.)
+- **Client address behind a proxy.** Real client IPs come from `X-Forwarded-For`, which uvicorn believes only from the peers listed in `FORWARDED_ALLOW_IPS` (default `127.0.0.1`, never `*`) and reads from the right; see [`deployment.md`](deployment.md#client-ip-and-proxy-headers).
 - Strict input validation with Pydantic (lengths, formats, `nvapi-` prefix).
 
 ## NVIDIA service compliance
