@@ -62,6 +62,8 @@ told which peers it may believe when they send `X-Forwarded-For`.
 
 `scripts/entrypoint.sh` starts uvicorn with `--proxy-headers --forwarded-allow-ips
 "$FORWARDED_ALLOW_IPS"`; the variable defaults to `127.0.0.1` (a reverse proxy on the same host).
+CIDR ranges in the list (as in `render.yaml`) need uvicorn 0.31.0 or later, which `pyproject.toml`
+requires; an older uvicorn would read `10.0.0.0/8` as a host name and trust no proxy at all.
 How uvicorn applies the list (from `uvicorn/middleware/proxy_headers.py`, uvicorn 0.54):
 
 1. If the TCP peer is **not** in the list, `X-Forwarded-*` is ignored and the peer is the client.

@@ -61,3 +61,28 @@ def test_the_lru_rationale_does_not_promise_to_stretch_nvidia_rate_limits():
     text = (ROOT / "docs" / "architecture.md").read_text()
     assert "respecting NVIDIA free-tier rate limits" not in text
     assert "does not raise, bypass or enforce any NVIDIA rate limit" in text
+
+
+def bounds(requirement: str) -> tuple[tuple[int, ...] | None, tuple[int, ...] | None]:
+    """The (lower, upper) version bounds ``pyproject.toml`` declares for ``requirement``."""
+    match = re.search(rf'^\s*"{re.escape(requirement)}(?:\[\w+\])?([^"]*)"', project_table(), re.M)
+    assert match, f"{requirement} is not a dependency"
+
+    def version(operator: str) -> tuple[int, ...] | None:
+        found = re.search(rf"(?<![<>=!~]){operator}\s*(\d+(?:\.\d+)*)", match.group(1))
+        return tuple(int(part) for part in found.group(1).split(".")) if found else None
+
+    return version(">="), version("<")
+
+
+def test_uvicorn_is_new_enough_for_the_cidr_ranges_the_entrypoint_passes():
+    """``--forwarded-allow-ips 10.0.0.0/8`` (render.yaml) needs uvicorn 0.31.0 or later: an older
+    one reads the CIDR as a literal host name and trusts no proxy at all."""
+    lower, _ = bounds("uvicorn")
+    assert lower is not None and lower >= (0, 31)
+
+
+def test_slowapi_is_capped_below_the_release_that_may_move_its_private_api():
+    """``app/api/rate_limit.py`` calls ``Limiter._check_request_limit`` and ``_should_exempt``."""
+    lower, upper = bounds("slowapi")
+    assert lower is not None and upper is not None and upper <= (0, 2)
