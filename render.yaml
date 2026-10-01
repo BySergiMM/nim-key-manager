@@ -19,6 +19,9 @@ services:
         fromDatabase:
           name: nim-key-manager-db
           property: connectionString
+      # generateValue: Render sets "a randomized, base64-encoded, 256-bit value" (44 characters,
+      # https://render.com/docs/blueprint-spec). The app refuses to start in production with a
+      # secret that is empty, a placeholder or shorter than 32 characters; these satisfy that.
       - key: JWT_SECRET
         generateValue: true            # secret manager: generated & stored by Render
       - key: ENCRYPTION_MASTER_KEY

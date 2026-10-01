@@ -125,13 +125,31 @@ list the exact proxy addresses in `FORWARDED_ALLOW_IPS`, or add
 exact visitor addresses but lets a client whose own traffic leaves through Cloudflare (for example
 WARP) choose its address, so prefer the first.
 
+## Secrets
+
+`JWT_SECRET` and `ENCRYPTION_MASTER_KEY` (and `MCP_OAUTH_JWT_SIGNING_KEY` when you set it) are checked
+when the service starts. Unless `ENVIRONMENT` is `development` (also `dev`, `local`, `test`,
+`testing`; anything else counts as production, and so does leaving it unset) it refuses to start while
+one of them is empty, is a placeholder (the built-in defaults or the ones in `.env.example`) or is
+shorter than 32 characters. It also refuses an example `FIRST_ADMIN_PASSWORD`
+(`change-me-strong-password`, `admin-change-me`). The error names the variables and never prints a value.
+
+- **Render**: nothing to do. `generateValue: true` produces "a randomized, base64-encoded, 256-bit
+  value" ([blueprint spec](https://render.com/docs/blueprint-spec)): 44 characters.
+- **Anywhere else**: generate your own, for example `openssl rand -base64 48` or `python scripts/generate_secrets.py`.
+- **Upgrading an existing instance** that fails the check: `JWT_SECRET` can be replaced at any time
+  (everybody logs in again). `ENCRYPTION_MASTER_KEY` encrypts the stored API keys, so replacing it
+  makes the keys already stored unreadable: re-encrypt them first (see "Operational recommendations"
+  in [`security.md`](security.md); this repository has no tool for it) or register them again
+  afterwards.
+
 ## Environment variables
 
 See [`.env.example`](../.env.example) for the full annotated list.
 
 ## Deployment alternatives
 
-The image is a standard OCI container (port `$PORT`, migrations in the entrypoint), so it runs unchanged on Fly.io, Railway, Cloud Run or ECS: it only needs `DATABASE_URL`, `JWT_SECRET` and `ENCRYPTION_MASTER_KEY` (plus `PUBLIC_BASE_URL` and the `MCP_*` variables if you enable the Claude connector).
+The image is a standard OCI container (port `$PORT`, migrations in the entrypoint), so it runs unchanged on Fly.io, Railway, Cloud Run or ECS: it only needs `DATABASE_URL`, `JWT_SECRET` and `ENCRYPTION_MASTER_KEY` (real random values, see [Secrets](#secrets); plus `PUBLIC_BASE_URL` and the `MCP_*` variables if you enable the Claude connector).
 
 ## Local development (optional)
 

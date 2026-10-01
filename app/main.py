@@ -110,6 +110,7 @@ def _make_handler(status_code: int) -> Callable[[Request, Exception], Awaitable[
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.debug)
+    settings.require_secure_secrets()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:

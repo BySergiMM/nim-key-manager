@@ -10,6 +10,23 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.domain.enums import Role
+from app.domain.exceptions import ConfigurationError
+
+# Placeholders shipped as defaults so that the package imports without configuration.
+# They are refused outside local development (see ``Settings.require_secure_secrets``).
+INSECURE_JWT_SECRET = "insecure-dev-secret-change-me"
+INSECURE_MASTER_KEY = "insecure-dev-master-key-change-me"
+
+# RFC 7518 section 3.2: an HS256 key must be at least as long as the hash output (256 bits).
+# The master key feeds an HKDF-SHA256 derivation, so the same floor applies to it.
+MIN_SECRET_LENGTH = 32
+
+# Environments in which the placeholder check is skipped. Anything else, including a value
+# nobody recognises, is treated as production.
+_LOCAL_ENVIRONMENTS = frozenset({"development", "dev", "local", "test", "testing"})
+
+# Text that marks a value as copied from .env.example, docker-compose.yml or the docs.
+_PLACEHOLDER_MARKERS = ("change-me", "changeme", "insecure-dev")
 
 
 class Settings(BaseSettings):
@@ -23,11 +40,11 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Security
-    jwt_secret: str = "insecure-dev-secret-change-me"
+    jwt_secret: str = INSECURE_JWT_SECRET
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
-    encryption_master_key: str = "insecure-dev-master-key-change-me"
+    encryption_master_key: str = INSECURE_MASTER_KEY
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./local.db"
@@ -150,10 +167,74 @@ class Settings(BaseSettings):
             return [item.strip() for item in text.split(",") if item.strip()]
         return value
 
+    # ------------------------------------------------------------------
+    # Startup checks
+    # ------------------------------------------------------------------
+    @property
+    def is_local_environment(self) -> bool:
+        return self.environment.strip().lower() in _LOCAL_ENVIRONMENTS
+
+    def secret_problems(self) -> list[str]:
+        """What is wrong with the configured secrets, one sentence per problem.
+
+        Names the variable and the problem; never the value.
+        """
+        problems: list[str] = []
+
+        def check(name: str, value: str | None, *, minimum: int) -> None:
+            text = (value or "").strip()
+            if not text:
+                problems.append(f"{name} is empty")
+            elif is_placeholder(text):
+                problems.append(f"{name} is a placeholder from the example configuration")
+            elif len(text) < minimum:
+                problems.append(f"{name} is shorter than {minimum} characters")
+
+        check("JWT_SECRET", self.jwt_secret, minimum=MIN_SECRET_LENGTH)
+        check("ENCRYPTION_MASTER_KEY", self.encryption_master_key, minimum=MIN_SECRET_LENGTH)
+        # Optional ones are only checked when set: unset means "derive from JWT_SECRET" or
+        # "feature off", which is safe.
+        if self.mcp_oauth_jwt_signing_key is not None:
+            check(
+                "MCP_OAUTH_JWT_SIGNING_KEY",
+                self.mcp_oauth_jwt_signing_key,
+                minimum=MIN_SECRET_LENGTH,
+            )
+        if self.first_admin_password is not None and is_placeholder(self.first_admin_password):
+            problems.append("FIRST_ADMIN_PASSWORD is a placeholder from the example configuration")
+        return problems
+
+    def require_secure_secrets(self) -> None:
+        """Refuse to start outside local development with placeholder, empty or short secrets.
+
+        API keys are encrypted with a value derived from ``ENCRYPTION_MASTER_KEY`` and every
+        session is a JWT signed with ``JWT_SECRET``. Starting with the public placeholder would
+        make the stored ciphertext decryptable, and the tokens forgeable, by anyone who has read
+        this repository.
+        """
+        if self.is_local_environment:
+            return
+        problems = self.secret_problems()
+        if problems:
+            raise ConfigurationError(
+                f"Refusing to start with ENVIRONMENT={self.environment}: "
+                + "; ".join(problems)
+                + f". Use your own random values of at least {MIN_SECRET_LENGTH} characters "
+                "(for example: openssl rand -base64 48); FIRST_ADMIN_PASSWORD, if set, must be "
+                "a password of your own. ENVIRONMENT=development skips this check and is for "
+                "local use only."
+            )
+
     def resolve_public_base_url(self) -> str | None:
         """Public base URL, falling back to Render's injected external URL."""
         url = self.public_base_url or os.environ.get("RENDER_EXTERNAL_URL")
         return url.rstrip("/") if url else None
+
+
+def is_placeholder(value: str) -> bool:
+    """True for the values this repository ships as examples (not for real secrets)."""
+    normalized = value.strip().lower()
+    return any(marker in normalized for marker in _PLACEHOLDER_MARKERS)
 
 
 @lru_cache
