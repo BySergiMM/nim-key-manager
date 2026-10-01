@@ -225,6 +225,12 @@ class Settings(BaseSettings):
                 "local use only."
             )
 
+    def mcp_credentials_configured(self) -> bool:
+        """True when the OAuth client credentials of the selected provider are both set."""
+        if self.mcp_auth_provider == "google":
+            return bool(self.mcp_google_client_id and self.mcp_google_client_secret)
+        return bool(self.mcp_github_client_id and self.mcp_github_client_secret)
+
     def resolve_public_base_url(self) -> str | None:
         """Public base URL, falling back to Render's injected external URL."""
         url = self.public_base_url or os.environ.get("RENDER_EXTERNAL_URL")

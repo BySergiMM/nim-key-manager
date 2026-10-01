@@ -16,7 +16,7 @@ Gestor **self-host y listo para producción** de las API Keys de **tu propia** c
 
 ## Conector para Claude (MCP)
 
-El servicio expone un servidor MCP en `‹BASE›/mcp` para añadirlo a **Claude como custom connector** (OAuth 2.1 con GitHub/Google). Guía completa: [`docs/connector.md`](docs/connector.md).
+El servicio expone un servidor MCP en `‹BASE›/mcp` para añadirlo a **Claude como custom connector** (OAuth 2.1 con GitHub/Google). Es opcional: hasta que definas las credenciales OAuth, `/mcp` queda apagado y el resto del servicio funciona con normalidad. Guía completa: [`docs/connector.md`](docs/connector.md).
 
 1. Crea una **OAuth App** en GitHub con callback `‹BASE›/auth/callback`.
 2. En Render define `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` y `MCP_ALLOWED_IDENTITIES` (tu login/email).

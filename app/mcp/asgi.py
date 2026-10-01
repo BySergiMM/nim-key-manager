@@ -36,9 +36,27 @@ def _allowed_hosts(settings: Settings, base_url: str) -> list[str]:
 
 
 def mount_mcp_connector(api_app: Starlette, settings: Settings) -> Starlette:
-    """Return the composed ASGI app, or ``api_app`` unchanged when MCP is off."""
+    """Return the composed ASGI app, or ``api_app`` unchanged when MCP is off.
+
+    The connector is optional. An instance that has not been given OAuth credentials yet (the
+    Render blueprint declares them ``sync: false``, so they may be left blank) serves the REST API
+    and the dashboard normally, leaves ``/mcp`` off and says so in a warning. Only a connector
+    that is half configured (credentials but no public URL) is a fatal misconfiguration.
+    """
     if not settings.mcp_enabled:
         logger.info("mcp_connector_disabled")
+        return api_app
+
+    if settings.mcp_auth_enabled and not settings.mcp_credentials_configured():
+        provider = settings.mcp_auth_provider.upper()
+        logger.warning(
+            "mcp_connector_not_configured",
+            detail=(
+                f"/mcp is OFF: set MCP_{provider}_CLIENT_ID and MCP_{provider}_CLIENT_SECRET "
+                "(and MCP_ALLOWED_IDENTITIES) to enable the Claude connector; the REST API and "
+                "the dashboard are running normally (see docs/connector.md)"
+            ),
+        )
         return api_app
 
     base_url = settings.resolve_public_base_url()

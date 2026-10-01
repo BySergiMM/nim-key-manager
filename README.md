@@ -27,7 +27,7 @@ Prefer another host? Any platform that runs a Docker container + PostgreSQL work
 
 ## Use it from Claude (MCP connector)
 
-The same deployment exposes a **Model Context Protocol server** at `‹BASE›/mcp` so you can add it to **Claude as a custom connector**. Claude authenticates with **OAuth 2.1** (GitHub by default, Google optional) and can list/inspect keys, **dispense** a ready-to-use key, register/rotate/revoke and manage projects — with the same RBAC and audit trail as the REST API. Only identities in `MCP_ALLOWED_IDENTITIES` may connect (fail-closed).
+The same deployment exposes a **Model Context Protocol server** at `‹BASE›/mcp` so you can add it to **Claude as a custom connector**. Claude authenticates with **OAuth 2.1** (GitHub by default, Google optional) and can list/inspect keys, **dispense** a ready-to-use key, register/rotate/revoke and manage projects — with the same RBAC and audit trail as the REST API. Only identities in `MCP_ALLOWED_IDENTITIES` may connect (fail-closed). The connector is optional: until you set the OAuth credentials below, `/mcp` stays off and everything else runs normally.
 
 1. Create a GitHub **OAuth App** with callback `‹BASE›/auth/callback`; copy the Client ID/Secret.
 2. In Render set `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` and `MCP_ALLOWED_IDENTITIES` (your GitHub login/e-mail). The rest is already in `render.yaml`.

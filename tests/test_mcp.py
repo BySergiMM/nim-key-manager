@@ -316,12 +316,94 @@ def test_mount_disabled_returns_same_app() -> None:
 
 
 def test_mount_requires_base_url_when_authenticated(monkeypatch) -> None:
+    """A connector that has credentials but no public URL is half configured: fatal."""
     monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
     settings = get_settings().model_copy(update={
         "mcp_enabled": True, "mcp_auth_enabled": True, "public_base_url": None,
+        "mcp_auth_provider": "github",
+        "mcp_github_client_id": "cid", "mcp_github_client_secret": "secret",
     })
     with pytest.raises(ConfigurationError):
         mount_mcp_connector(object(), settings)  # type: ignore[arg-type]
+
+
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict]] = []
+
+    def __getattr__(self, level: str):
+        return lambda event, **fields: self.events.append((level, event, fields))
+
+
+_NO_CREDENTIALS = {
+    "mcp_enabled": True, "mcp_auth_enabled": True, "public_base_url": BASE_URL,
+    "mcp_github_client_id": None, "mcp_github_client_secret": None,
+    "mcp_google_client_id": None, "mcp_google_client_secret": None,
+}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"mcp_auth_provider": "github"},
+        {"mcp_auth_provider": "google"},
+        # one half of the pair is not enough
+        {"mcp_auth_provider": "github", "mcp_github_client_id": "cid"},
+        {"mcp_auth_provider": "google", "mcp_google_client_secret": "secret"},
+        # credentials of the OTHER provider do not count
+        {
+            "mcp_auth_provider": "google",
+            "mcp_github_client_id": "a",
+            "mcp_github_client_secret": "b",
+        },
+    ],
+)
+def test_mount_leaves_mcp_off_without_oauth_credentials(monkeypatch, overrides) -> None:
+    """Missing OAuth credentials used to abort start-up; now /mcp stays off, with a warning."""
+    import app.mcp.asgi as asgi_mod
+
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(asgi_mod, "logger", recorder)
+    settings = get_settings().model_copy(update={**_NO_CREDENTIALS, **overrides})
+    sentinel = object()
+    assert mount_mcp_connector(sentinel, settings) is sentinel  # type: ignore[arg-type]
+    levels = [(level, event) for level, event, _ in recorder.events]
+    assert ("warning", "mcp_connector_not_configured") in levels
+    provider = overrides["mcp_auth_provider"].upper()
+    detail = next(f["detail"] for _, event, f in recorder.events if event.endswith("configured"))
+    assert f"MCP_{provider}_CLIENT_ID" in detail and "/mcp is OFF" in detail
+
+
+def test_mount_mounts_mcp_once_the_credentials_are_set() -> None:
+    from app.main import create_app
+
+    settings = get_settings().model_copy(update={
+        **_NO_CREDENTIALS, "mcp_auth_provider": "github",
+        "mcp_github_client_id": "cid", "mcp_github_client_secret": "secret",
+    })
+    api = create_app()
+    composed = mount_mcp_connector(api, settings)
+    assert composed is not api
+    assert any(getattr(r, "path", None) == "/mcp" for r in composed.routes)
+
+
+async def test_app_serves_rest_and_dashboard_when_mcp_has_no_credentials(monkeypatch) -> None:
+    """The deploy-button case: Render leaves the sync:false OAuth variables blank."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import create_asgi_app
+
+    await _reset_db()
+    settings = get_settings()
+    for field, value in _NO_CREDENTIALS.items():
+        monkeypatch.setattr(settings, field, value)
+    monkeypatch.setattr(settings, "mcp_auth_provider", "github")
+    transport = ASGITransport(app=create_asgi_app())
+    async with AsyncClient(transport=transport, base_url="http://testserver") as http:
+        assert (await http.get("/health")).status_code == 200
+        assert (await http.get("/")).status_code == 200
+        assert (await http.get("/api/v1/auth/me")).status_code == 401  # reached the API
+        assert (await http.get("/mcp")).status_code == 404  # connector is off
 
 
 def test_composed_app_serves_api_and_mounts_mcp(monkeypatch) -> None:

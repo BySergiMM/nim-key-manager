@@ -218,9 +218,11 @@ def create_asgi_app() -> Starlette:
     """Production ASGI entrypoint.
 
     Wraps the REST/dashboard application (:func:`create_app`) with the Claude MCP
-    connector when ``MCP_ENABLED`` is set, exposing an OAuth-secured ``/mcp``
-    endpoint alongside the existing API. ``create_app`` is left untouched so the
-    test suite keeps exercising the pure FastAPI app.
+    connector when ``MCP_ENABLED`` is set and the OAuth credentials are configured,
+    exposing an OAuth-secured ``/mcp`` endpoint alongside the existing API; without the
+    credentials the connector stays off and the rest of the service runs.
+    ``create_app`` is left untouched so the test suite keeps exercising the pure
+    FastAPI app.
     """
     from app.mcp.asgi import mount_mcp_connector
 

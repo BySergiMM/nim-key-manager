@@ -9,6 +9,11 @@ API.
 The connector is served by the *same* deployment at `‹PUBLIC_BASE_URL›/mcp`. No
 separate service to run.
 
+**The connector is optional.** Until the OAuth credentials of Step 2 are set, the
+service starts normally with the REST API and the dashboard, `/mcp` answers `404`,
+and the log carries a warning (`mcp_connector_not_configured`) naming the variables
+that are missing. Nothing else depends on it.
+
 ## How authentication works
 
 Claude custom connectors speak **OAuth 2.1** (Authorization Code + PKCE) and
@@ -70,7 +75,10 @@ Environment**; they are already declared in `render.yaml` as
 | `MCP_ALLOWED_IDENTITIES` | Your GitHub login and/or e-mail, comma-separated (e.g. `your-login,you@example.com`) |
 
 Already set for you by the blueprint: `MCP_ENABLED=true`, `MCP_AUTH_ENABLED=true`,
-`MCP_OAUTH_JWT_SIGNING_KEY` (generated). Save and let the service redeploy.
+`MCP_OAUTH_JWT_SIGNING_KEY` (generated). Save and let the service redeploy. If the
+Client ID/Secret are still blank, the connector stays off (see above) rather than
+stopping the service; a connector that has credentials but no public URL
+(`PUBLIC_BASE_URL` / `RENDER_EXTERNAL_URL`) does refuse to start.
 
 Optional hardening / convenience:
 
@@ -144,6 +152,9 @@ dashboard or REST API.
 
 ## Troubleshooting
 
+- **`404` on `/mcp`** — the connector is off because the OAuth client ID/secret of the
+  selected provider are not both set (or `MCP_ENABLED=false`). Check the service log for
+  `mcp_connector_not_configured`.
 - **`421 Misdirected Request` on `/mcp`** — the request `Host` isn't allow-listed.
   Ensure `PUBLIC_BASE_URL`/`RENDER_EXTERNAL_URL` matches the host Claude uses, or set
   `MCP_ALLOWED_HOSTS` explicitly.
@@ -159,8 +170,11 @@ dashboard or REST API.
 For local testing you can disable auth — **never do this on a public deployment**:
 
 ```bash
-MCP_AUTH_ENABLED=false PUBLIC_BASE_URL=http://localhost:8000 \
+ENVIRONMENT=development MCP_AUTH_ENABLED=false PUBLIC_BASE_URL=http://localhost:8000 \
   uvicorn app.main:create_asgi_app --factory
 ```
+
+(`ENVIRONMENT=development` is what lets the service start without real secrets; see
+[Secrets](deployment.md#secrets).)
 
 With auth disabled the actor resolves to `MCP_DEV_IDENTITY` (or the first admin).
