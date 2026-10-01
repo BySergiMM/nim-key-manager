@@ -21,7 +21,7 @@
    - `DATABASE_URL` injected from the database.
 2. When prompted, set `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD` (your initial admin, created on first boot; required, because no HTTP request can create the first administrator).
 3. Open the service URL: log in at `/`, explore the API at `/docs`.
-4. Every push to `main` runs CI (lint + types + tests + build) and redeploys automatically. Migrations (`alembic upgrade head`) run on container start.
+4. Every push to `main` runs CI (lint + types + tests + build) and Render redeploys it automatically once all the checks pass (a failing commit is not deployed). Migrations (`alembic upgrade head`) run on container start.
 
 Prefer another host? Any platform that runs a Docker container + PostgreSQL works — see [`docs/deployment.md`](docs/deployment.md).
 

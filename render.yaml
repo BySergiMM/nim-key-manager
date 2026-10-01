@@ -1,5 +1,5 @@
 # Render Blueprint: provisions the managed Postgres database, the web service,
-# and all secrets automatically. Deploys on every push to main.
+# and all secrets automatically. A push to main is deployed only after its CI checks pass.
 # Docs: https://render.com/docs/blueprint-spec
 databases:
   - name: nim-key-manager-db
@@ -13,7 +13,12 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
-    autoDeployTrigger: commit
+    # checksPass: Render deploys a commit only after all of its GitHub checks pass, and not at all
+    # when one fails or none is found (https://render.com/docs/blueprint-spec,
+    # https://render.com/docs/deploys#integrating-with-ci). "commit" deployed every push at once,
+    # CI result or not. If you use the deploy hook of .github/workflows/deploy.yml instead,
+    # set this to "off" so the hook is the only trigger.
+    autoDeployTrigger: checksPass
     envVars:
       - key: DATABASE_URL
         fromDatabase:
