@@ -8,6 +8,8 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen.svg)](#development--tests)
 
+> **Not affiliated with NVIDIA.** This is an independent open-source project: it is not affiliated with, endorsed by or sponsored by NVIDIA Corporation. "NVIDIA", "NVIDIA Build" and "NIM" are used only to say which service the software works with; product and company names belong to their respective owners.
+
 > **NVIDIA Terms of Service.** NVIDIA Build offers **no public API** to create or rotate keys programmatically (you generate them at [build.nvidia.com](https://build.nvidia.com/settings/api-keys)), and API keys **must not be shared or redistributed** to third parties. This project is therefore designed for **you to manage your _own_ keys on your _own_ instance**: the only outbound call is the official read-only **validation** endpoint `GET https://integrate.api.nvidia.com/v1/models`. It does not automate or scrape the NVIDIA portal, and it is **not** a service for handing your keys to other people.
 
 ## Deploy your own (no local setup)

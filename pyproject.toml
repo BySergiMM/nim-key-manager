@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nim-key-manager"
-version = "1.1.0"
+dynamic = ["version"]  # single source of truth: app/__init__.py (see [tool.hatch.version])
 description = "Production-grade manager for NVIDIA Build/NIM API keys: encrypted storage, assisted rotation, expiry detection, usage stats, RBAC, audit and a Claude MCP connector."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,6 +39,9 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+
+[tool.hatch.version]
+path = "app/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

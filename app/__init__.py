@@ -1,3 +1,7 @@
-"""NIM Key Manager application package."""
+"""NIM Key Manager application package.
 
-__version__ = "1.0.0"
+Single source of truth for the version: ``pyproject.toml`` reads it from here
+(``[tool.hatch.version]``), and the API, ``/health`` and the MCP server report it.
+"""
+
+__version__ = "1.1.0"

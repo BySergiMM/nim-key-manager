@@ -4,6 +4,8 @@
 
 Gestor **self-host y listo para producción** de las API Keys de **tu propia** cuenta de NVIDIA Build/NIM: almacenamiento cifrado, rotación asistida, detección de expiraciones, estadísticas, proyectos, RBAC, auditoría, dashboard web y **conector para Claude (MCP)**. Despliega tu propia instancia en minutos; todo se configura por variables de entorno.
 
+> **No afiliado con NVIDIA.** Es un proyecto independiente de código abierto: no está afiliado, respaldado ni patrocinado por NVIDIA Corporation. "NVIDIA", "NVIDIA Build" y "NIM" se usan solo para indicar con qué servicio funciona el software; los nombres de productos y empresas pertenecen a sus respectivos dueños.
+
 > **Términos de NVIDIA.** NVIDIA Build **no ofrece API pública** para crear/rotar keys, y las keys **no se pueden compartir ni redistribuir** a terceros. Por eso este proyecto está pensado para que **tú gestiones tus propias keys en tu propia instancia**: la única llamada saliente es la **validación** oficial de solo lectura (`GET https://integrate.api.nvidia.com/v1/models`). No es un servicio para repartir tus keys a otras personas.
 
 ## Despliega el tuyo
