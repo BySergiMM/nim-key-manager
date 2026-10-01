@@ -28,6 +28,7 @@ from app.mcp.identity import (
     resolve_actor,
     resolve_email,
 )
+from tests.conftest import RecordingLogger
 
 ADMIN_EMAIL = "admin@example.com"
 VIEWER_EMAIL = "viewer@example.com"
@@ -55,9 +56,8 @@ async def _reset_db() -> None:
 
 async def _seed_admin() -> None:
     async with SessionFactory() as session:
-        await AuthService(session).register(
-            email=ADMIN_EMAIL, password="SuperSecret123", full_name="Admin",
-            role=Role.ADMIN, actor=None,
+        await AuthService(session).bootstrap_admin(
+            email=ADMIN_EMAIL, password="SuperSecret123", full_name="Admin"
         )
 
 
@@ -68,14 +68,6 @@ async def _seed_viewer() -> None:
             email=VIEWER_EMAIL, password="Password123!", full_name="Viewer",
             role=Role.VIEWER, actor=admin,
         )
-
-
-class _RecordingLogger:
-    def __init__(self) -> None:
-        self.events: list[tuple[str, str, dict]] = []
-
-    def __getattr__(self, level: str):
-        return lambda event, **fields: self.events.append((level, event, fields))
 
 
 @pytest.fixture
@@ -278,7 +270,7 @@ async def test_a_denied_identity_is_logged_with_its_account_id_but_not_told_it(m
     """The operator needs the id to fill MCP_ALLOWED_IDENTITIES; the caller learns nothing."""
     await _reset_db()
     await _seed_admin()
-    recorder = _RecordingLogger()
+    recorder = RecordingLogger()
     monkeypatch.setattr(identity_mod, "logger", recorder)
     monkeypatch.setattr(identity_mod, "extract_identity",
                         lambda: Identity("98814441", "octocat", "o@ex.com", None))
@@ -506,7 +498,7 @@ def test_mount_leaves_mcp_off_without_oauth_credentials(monkeypatch, overrides) 
     """Missing OAuth credentials used to abort start-up; now /mcp stays off, with a warning."""
     import app.mcp.asgi as asgi_mod
 
-    recorder = _RecordingLogger()
+    recorder = RecordingLogger()
     monkeypatch.setattr(asgi_mod, "logger", recorder)
     settings = get_settings().model_copy(update={**_NO_CREDENTIALS, **overrides})
     sentinel = object()
@@ -577,7 +569,7 @@ def test_mount_warns_about_allow_list_entries_it_will_ignore(monkeypatch) -> Non
     import app.mcp.asgi as asgi_mod
     from app.main import create_app
 
-    recorder = _RecordingLogger()
+    recorder = RecordingLogger()
     monkeypatch.setattr(asgi_mod, "logger", recorder)
     mount_mcp_connector(create_app(), _mountable(mcp_allowed_identities=["octocat", "42"]))
     [(level, event, fields)] = [e for e in recorder.events if "allow_list" in e[1]]
@@ -590,7 +582,7 @@ def test_mount_warns_when_nobody_can_connect(monkeypatch) -> None:
     import app.mcp.asgi as asgi_mod
     from app.main import create_app
 
-    recorder = _RecordingLogger()
+    recorder = RecordingLogger()
     monkeypatch.setattr(asgi_mod, "logger", recorder)
     mount_mcp_connector(create_app(), _mountable(mcp_allowed_identities=["octocat"]))
     events = {event for _, event, _ in recorder.events}
@@ -601,7 +593,7 @@ def test_mount_is_quiet_about_a_good_allow_list(monkeypatch) -> None:
     import app.mcp.asgi as asgi_mod
     from app.main import create_app
 
-    recorder = _RecordingLogger()
+    recorder = RecordingLogger()
     monkeypatch.setattr(asgi_mod, "logger", recorder)
     mount_mcp_connector(create_app(), _mountable(mcp_allowed_identities=["42", "me@ex.com"]))
     assert not [e for e in recorder.events if "allow_list" in e[1]]

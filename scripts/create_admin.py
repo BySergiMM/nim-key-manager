@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Create an administrator account.
+"""Create the first administrator, or promote an existing user to administrator.
 
 Usage:
     python scripts/create_admin.py <email> <password> [full name]
 
-Requires DATABASE_URL and the security env vars to be set.
+Requires DATABASE_URL and the security env vars to be set. This is the host-side counterpart
+of FIRST_ADMIN_EMAIL / FIRST_ADMIN_PASSWORD: no HTTP request can create the first administrator.
+Creating a user that does not exist is only possible while there are no users at all; to make
+somebody else an administrator later, use PATCH /api/v1/users/{id} as an administrator.
 """
 
 from __future__ import annotations
@@ -31,8 +34,8 @@ async def main() -> None:
             await session.commit()
             print(f"Promoted existing user {email} to admin.")
             return
-        user = await AuthService(session).register(
-            email=email, password=password, full_name=full_name, role=Role.ADMIN, actor=None
+        user = await AuthService(session).bootstrap_admin(
+            email=email, password=password, full_name=full_name
         )
         print(f"Created admin {user.email} ({user.id}).")
 

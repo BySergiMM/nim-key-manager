@@ -13,7 +13,7 @@
 - Passwords hashed with **argon2id** (pwdlib "recommended").
 - Signed **JWTs** (HS256, secret from the secret manager) with an explicit `type`: access (30 min) and refresh (7 days). A refresh token cannot be used as an access token or vice versa.
 - Hierarchical **RBAC**: `viewer < manager < admin`. The full matrix is in the README. Invariant guards: the last active admin cannot be removed/demoted.
-- Safe bootstrap: the first user (via environment variable or first registration) is admin; afterwards registration is restricted to admins.
+- Safe bootstrap: the first administrator is created at start-up from `FIRST_ADMIN_EMAIL` / `FIRST_ADMIN_PASSWORD` (or with `scripts/create_admin.py` on a host with database access). No HTTP request can create it: `POST /api/v1/auth/register` is admin-only from the very first request, so a fresh deployment cannot be taken over by whoever reaches it first. See [`deployment.md`](deployment.md#first-administrator).
 
 ## Claude connector (MCP) security
 

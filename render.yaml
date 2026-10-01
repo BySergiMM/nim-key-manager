@@ -27,7 +27,7 @@ services:
       - key: ENCRYPTION_MASTER_KEY
         generateValue: true            # secret manager: generated & stored by Render
       - key: FIRST_ADMIN_EMAIL
-        sync: false                    # prompted once in the Render dashboard
+        sync: false                    # prompted once in the Render dashboard; required: the only way to get the first admin
       - key: FIRST_ADMIN_PASSWORD
         sync: false                    # prompted once in the Render dashboard
       - key: ENVIRONMENT

@@ -75,24 +75,37 @@ _STATUS_BY_EXCEPTION: tuple[tuple[type[DomainError], int], ...] = (
 
 
 async def _seed_first_admin() -> None:
-    """Create the bootstrap admin from env vars when the user table is empty."""
+    """Create the bootstrap admin from env vars when the user table is empty.
+
+    This and ``scripts/create_admin.py`` are the only ways to get a first administrator: no
+    HTTP request can create one (``POST /api/v1/auth/register`` is admin-only), so a freshly
+    deployed instance cannot be taken over by whoever reaches it first. When there are no
+    users and no bootstrap admin is configured the service is up but nobody can sign in, and
+    this says so.
+    """
     settings = get_settings()
-    if not settings.first_admin_email or not settings.first_admin_password:
-        return
     from app.application.services.auth_service import AuthService
-    from app.domain.enums import Role
     from app.infrastructure.db.repositories import UserRepository
 
     async with SessionFactory() as session:
-        if await UserRepository(session).count() == 0:
-            await AuthService(session).register(
-                email=settings.first_admin_email,
-                password=settings.first_admin_password,
-                full_name="Bootstrap admin",
-                role=Role.ADMIN,
-                actor=None,
+        if await UserRepository(session).count() != 0:
+            return
+        if not settings.first_admin_email or not settings.first_admin_password:
+            logger.warning(
+                "bootstrap_admin_not_configured",
+                detail=(
+                    "there are no users and FIRST_ADMIN_EMAIL / FIRST_ADMIN_PASSWORD are not "
+                    "both set, so nobody can sign in: set them and restart "
+                    "(see docs/deployment.md#first-administrator)"
+                ),
             )
-            logger.info("bootstrap_admin_created", email=settings.first_admin_email)
+            return
+        await AuthService(session).bootstrap_admin(
+            email=settings.first_admin_email,
+            password=settings.first_admin_password,
+            full_name="Bootstrap admin",
+        )
+        logger.info("bootstrap_admin_created", email=settings.first_admin_email)
 
 
 def _make_handler(status_code: int) -> Callable[[Request, Exception], Awaitable[Response]]:

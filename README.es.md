@@ -11,7 +11,7 @@ Gestor **self-host y listo para producción** de las API Keys de **tu propia** c
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/BySergiMM/nim-key-manager)
 
 1. Pulsa el botón (o **Use this template**) y en [Render](https://render.com) elige **New → Blueprint**. `render.yaml` aprovisiona solo la base de datos PostgreSQL, el servicio Docker y los secretos.
-2. Introduce `FIRST_ADMIN_EMAIL` y `FIRST_ADMIN_PASSWORD` (tu admin inicial).
+2. Introduce `FIRST_ADMIN_EMAIL` y `FIRST_ADMIN_PASSWORD` (tu admin inicial; son obligatorias: ninguna petición HTTP puede crear al primer administrador).
 3. Cada push a `main` ejecuta CI y redespliega. Las migraciones corren al arrancar.
 
 ## Conector para Claude (MCP)

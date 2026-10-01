@@ -19,7 +19,7 @@
    - the Dockerized web service with a health check,
    - the secrets `JWT_SECRET`, `ENCRYPTION_MASTER_KEY` and `MCP_OAUTH_JWT_SIGNING_KEY` (generated and stored by Render's secret manager),
    - `DATABASE_URL` injected from the database.
-2. When prompted, set `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD` (your initial admin, created on first boot).
+2. When prompted, set `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD` (your initial admin, created on first boot; required, because no HTTP request can create the first administrator).
 3. Open the service URL: log in at `/`, explore the API at `/docs`.
 4. Every push to `main` runs CI (lint + types + tests + build) and redeploys automatically. Migrations (`alembic upgrade head`) run on container start.
 

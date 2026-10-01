@@ -6,7 +6,7 @@
 
 1. Push the repository to GitHub (or **Use this template**).
 2. In [Render](https://dashboard.render.com): **New → Blueprint** → select the repo → **Apply**.
-3. Enter when prompted (once): `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD`.
+3. Enter when prompted (once): `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD`. They are required: they are the only way to get the first administrator (see [First administrator](#first-administrator)).
 4. Wait for the first deploy. The public URL exposes:
    - Dashboard: `/`
    - OpenAPI: `/docs`
@@ -142,6 +142,24 @@ shorter than 32 characters. It also refuses an example `FIRST_ADMIN_PASSWORD`
   makes the keys already stored unreadable: re-encrypt them first (see "Operational recommendations"
   in [`security.md`](security.md); this repository has no tool for it) or register them again
   afterwards.
+
+## First administrator
+
+Nobody can become the first administrator over HTTP: `POST /api/v1/auth/register` only accepts an
+administrator, from the first request on. (It used to make the first caller on an empty installation
+an administrator, so an instance deployed without the variables below belonged to whoever reached it
+first.) The first administrator is created by code that runs on the host:
+
+- **`FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD`** (both): when the service starts and there are no
+  users, it creates that administrator. This is what the Render blueprint prompts for. Once the first
+  administrator exists the variables are ignored and can be removed.
+- **`python scripts/create_admin.py <email> <password> [full name]`**, from a checkout with
+  `DATABASE_URL` and the secrets in the environment (the script is not part of the Docker image). It
+  creates the first administrator while there are no users, or promotes an existing user.
+
+If there are no users and the variables are missing the service still starts, and the log says
+`bootstrap_admin_not_configured`: nobody can sign in until you set them and restart. Later
+administrators are created by an administrator (`POST /api/v1/users`, `PATCH /api/v1/users/{id}`).
 
 ## Environment variables
 
