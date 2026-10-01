@@ -37,7 +37,7 @@ It is never written to logs (structured logging with no request bodies), never r
 - **Dashboard hardening**: the dashboard is a static page that renders every API value (key and project names, audit actors, IP addresses…) as text with `textContent`, never as HTML, and it is served with a strict `Content-Security-Policy` (`default-src 'self'`, no inline script or style, `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`). A hostile key or project name therefore cannot run script in an administrator's browser.
 - **`X-Request-ID` header** and per-request correlated JSON logging.
 - **Non-root** container, slim multi-stage image, no secrets baked into the image.
-- Configurable CORS; `--proxy-headers` for real client IPs behind Render's proxy.
+- Configurable CORS. Real client IPs behind a proxy come from `X-Forwarded-For`, which uvicorn believes only from the peers listed in `FORWARDED_ALLOW_IPS` (default `127.0.0.1`, never `*`) and reads from the right; see [`deployment.md`](deployment.md#client-ip-and-proxy-headers).
 - Strict input validation with Pydantic (lengths, formats, `nvapi-` prefix).
 
 ## NVIDIA service compliance

@@ -41,6 +41,90 @@ Recommendation: disable "Auto-Deploy" in Render and use the hook so no broken co
 - **Health**: `/health` checks the database connection.
 - **Jobs**: expiry (hourly) and the NVIDIA validation sweep (every 6 h) record results in logs and the audit trail.
 
+## Client IP and proxy headers
+
+The rate limiter (`RATE_LIMIT_*`) and the audit log both key on the client address that uvicorn
+derives for each request. Behind a reverse proxy that address is the proxy's own, unless uvicorn is
+told which peers it may believe when they send `X-Forwarded-For`.
+
+`scripts/entrypoint.sh` starts uvicorn with `--proxy-headers --forwarded-allow-ips
+"$FORWARDED_ALLOW_IPS"`; the variable defaults to `127.0.0.1` (a reverse proxy on the same host).
+How uvicorn applies the list (from `uvicorn/middleware/proxy_headers.py`, uvicorn 0.54):
+
+1. If the TCP peer is **not** in the list, `X-Forwarded-*` is ignored and the peer is the client.
+2. If it is, uvicorn walks `X-Forwarded-For` from the **right** and takes the first entry that is
+   not itself in the list.
+3. The literal `*` is special: every peer is trusted and uvicorn takes the **left-most** entry,
+   which is the one the client writes itself.
+
+The entrypoint used to pass `*`. A client could then send a different `X-Forwarded-For` on every
+request to get a fresh bucket in the login limiter (10 attempts per minute became unlimited) and to
+store arbitrary text in `audit_logs.ip_address`.
+
+`FORWARDED_ALLOW_IPS` is a comma-separated list of IP addresses and CIDR ranges:
+
+| Deployment | Value |
+|---|---|
+| No proxy (local, `docker compose`) | leave unset (`127.0.0.1`): the headers are ignored |
+| nginx / Caddy / Traefik on the same host | leave unset; use `127.0.0.1,::1` if the proxy connects over IPv6 loopback |
+| Platform load balancer | the address range the balancer connects from |
+| Render | set by `render.yaml`: `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` |
+
+The entrypoint prints the effective list at start-up and warns when it contains `*`.
+
+### On Render
+
+What Render documents, and what it does not (checked 2026-10-01):
+
+- Traffic reaches a web service "through Cloudflare's global network" and Render's load balancers,
+  and the app sees the proxy's address unless it reads `X-Forwarded-For`
+  ([How Render handles DDoS attacks](https://render.com/articles/how-render-handles-ddos-attacks)).
+  Render's FastAPI guide warns that `--forwarded-allow-ips="*"` "allows bad actors to spoof their IP
+  address" and to limit it to "the private IPs or CIDR blocks of your managed load balancers"
+  ([FastAPI production best practices](https://render.com/articles/fastapi-production-best-practices)).
+- Render does **not** document the addresses of those proxies or the exact format of the header (the
+  [web services](https://render.com/docs/web-services) and
+  [private network](https://render.com/docs/private-network) pages say nothing about either). A Render
+  staff reply from 2021 says the first entry is set to the real client
+  ([feedback.render.com](https://feedback.render.com/features/p/send-the-correct-xforwardedfor)); a
+  community post reports that Render does not clear a client-supplied header and appends to it
+  ([community.render.com](https://community.render.com/t/accessing-client-ips-in-a-node-express-app/36282)).
+  The two are not consistent, so nothing here relies on the first entry being genuine.
+- Cloudflare [appends](https://developers.cloudflare.com/fundamentals/reference/http-headers/) the
+  address of the peer that connects to it at the end of an existing `X-Forwarded-For`.
+
+Because uvicorn takes the right-most address that is not trusted, the entries a client can influence
+(the ones to the left of whatever the infrastructure appends) are never used, whichever of the two
+behaviours is the real one. `render.yaml` therefore trusts the private address space the proxy
+connects from. That last part is an inference: Render publishes no range.
+
+**Residual risk. Check it after the first deploy:**
+
+- If the right-most entry Render appends is a public (Cloudflare) address rather than the visitor's,
+  the limiter and the audit log key on that address. The limiter still cannot be bypassed, but
+  clients behind the same address share one budget, and the audit IP is less useful.
+- If Render's balancer connects from outside those ranges, `X-Forwarded-For` is ignored altogether and
+  every request is attributed to the balancer: the login limit (10/minute) is then shared by everybody.
+- Another workload in the same private network (for example a second service in your Render
+  workspace) is a trusted peer and can forge the header.
+
+To check which case you are in, log in once with a forged header and read the audit entry:
+
+```bash
+BASE=https://your-service.onrender.com
+curl -s $BASE/api/v1/auth/login -H 'Content-Type: application/json' \
+  -H 'X-Forwarded-For: 203.0.113.7' -d '{"email":"you@example.com","password":"your-password"}'
+# then, with the access token from that response:
+curl -s "$BASE/api/v1/audit?action=user.login&limit=1" -H "Authorization: Bearer $TOKEN" | jq '.[0].ip_address'
+curl -s https://ifconfig.me   # your own public address
+```
+
+The audit entry must show your public address, not `203.0.113.7`. If it shows a proxy address, either
+list the exact proxy addresses in `FORWARDED_ALLOW_IPS`, or add
+[Cloudflare's published ranges](https://www.cloudflare.com/ips/) to it. The second option gives
+exact visitor addresses but lets a client whose own traffic leaves through Cloudflare (for example
+WARP) choose its address, so prefer the first.
+
 ## Environment variables
 
 See [`.env.example`](../.env.example) for the full annotated list.

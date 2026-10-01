@@ -37,6 +37,13 @@ services:
         value: "true"
       - key: RATE_LIMIT_ENABLED
         value: "true"
+      # uvicorn believes X-Forwarded-For only from these peers and then takes the right-most
+      # address that is NOT in this list, so a client cannot pick its own IP (rate limits,
+      # audit log). Never "*". Render does not publish its proxy address ranges; these are
+      # the private (RFC 1918) ranges the proxy reaches the container from (an inference).
+      # Read docs/deployment.md#client-ip-and-proxy-headers before changing it.
+      - key: FORWARDED_ALLOW_IPS
+        value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       # --- Claude MCP connector (OAuth 2.1) ---------------------------------
       # PUBLIC_BASE_URL is taken automatically from RENDER_EXTERNAL_URL.
       - key: MCP_ENABLED
