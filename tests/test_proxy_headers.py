@@ -18,9 +18,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from uvicorn import Config
 
+from app.api.deps import client_ip
 from app.core.config import get_settings
 from app.main import create_app
 
@@ -142,6 +144,15 @@ async def test_rotating_x_forwarded_for_does_not_bypass_the_login_limiter(
         ("10.1.2.3", "198.51.100.77", "198.51.100.77"),
         ("10.1.2.3", "1.2.3.4, 198.51.100.77", "198.51.100.77"),
         ("172.20.0.9", "<img src=x onerror=alert(1)>, 198.51.100.77, 10.9.9.9", "198.51.100.77"),
+        # IPv6, with the brackets and port uvicorn strips: recorded in its canonical form.
+        ("10.1.2.3", "[2001:db8:0:0:0:0:0:1]:443", "2001:db8::1"),
+        # A proxy that forwards the header without appending to it: what is left of it is
+        # whatever the client wrote. Not an address, so nothing is recorded (uvicorn has already
+        # dropped the real peer; there is nothing to fall back to).
+        ("10.1.2.3", "<img src=x onerror=alert(1)>", None),
+        # longer than the audit_logs.ip_address column
+        pytest.param("10.1.2.3", "x" * 200, None, id="longer-than-the-column"),
+        ("10.1.2.3", "fe80::1%eth0", None),  # a scoped address is not a client address
     ],
 )
 async def test_audit_log_records_the_address_the_proxy_saw(
@@ -164,3 +175,33 @@ async def test_audit_log_records_the_address_the_proxy_saw(
     addresses = {entry["ip_address"] for entry in entries}
     assert expected in addresses
     assert not any("<" in (address or "") for address in addresses)
+
+
+# --------------------------------------------------------------------------- #
+# client_ip() on its own                                                        #
+# --------------------------------------------------------------------------- #
+def request_from(client: tuple[str, int] | None) -> Request:
+    return Request({"type": "http", "headers": [], "client": client})
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("203.0.113.7", "203.0.113.7"),
+        ("2001:0db8:0000:0000:0000:0000:0000:0001", "2001:db8::1"),
+        ("", None),
+        ("unknown", None),
+        ("<script>alert(1)</script>", None),
+        ("203.0.113.7, 198.51.100.1", None),
+        ("203.0.113.7:443", None),  # uvicorn removes the port; a leftover one is not an address
+        ("999.1.1.1", None),
+        pytest.param("fe80::1%" + "e" * 200, None, id="scoped-and-long"),
+        pytest.param("a" * 5000, None, id="5000-characters"),
+    ],
+)
+def test_client_ip_is_a_valid_address_or_nothing(host, expected):
+    assert client_ip(request_from((host, 4000))) == expected
+
+
+def test_client_ip_is_none_without_a_peer():
+    assert client_ip(request_from(None)) is None

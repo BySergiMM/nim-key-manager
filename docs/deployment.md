@@ -72,6 +72,11 @@ How uvicorn applies the list (from `uvicorn/middleware/proxy_headers.py`, uvicor
 3. The literal `*` is special: every peer is trusted and uvicorn takes the **left-most** entry,
    which is the one the client writes itself.
 
+uvicorn does not check that the entry it takes is an address (a proxy that forwards the header
+without appending to it hands over whatever the client wrote), so the audit log records the client
+address only when it is a valid IP address and stores nothing otherwise; uvicorn discards the real
+peer address, so there is none to fall back to.
+
 The entrypoint used to pass `*`. A client could then send a different `X-Forwarded-For` on every
 request to get a fresh bucket in the login limiter (10 attempts per minute became unlimited) and to
 store arbitrary text in `audit_logs.ip_address`.

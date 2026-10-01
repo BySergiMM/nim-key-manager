@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -89,4 +90,22 @@ def get_key_validator() -> KeyValidator:
 
 
 def client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    """The client address to write to the audit log: a valid IP address, or ``None``.
+
+    Behind a trusted proxy uvicorn replaces the peer address with the entry it takes from
+    ``X-Forwarded-For``. It strips the brackets and port but does not check that what is left is
+    an address, so a proxy that forwards the header without appending to it hands the application
+    whatever the client wrote (HTML, or text longer than the ``audit_logs.ip_address`` column).
+    That is validated here. uvicorn also drops the original peer address, so there is nothing to
+    fall back to and an entry that is not an address is recorded as unknown.
+    """
+    host = request.client.host if request.client else None
+    if not host:
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if getattr(address, "scope_id", None):  # fe80::1%<anything>: not a client address
+        return None
+    return str(address)
