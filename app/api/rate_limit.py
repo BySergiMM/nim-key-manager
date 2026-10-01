@@ -15,6 +15,10 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[_settings.rate_limit_default],
     enabled=_settings.rate_limit_enabled,
+    # One budget per route (the endpoint function), not per literal URL: with the default
+    # "url" style, GET /keys/<one id after another> would get a fresh budget for every id and
+    # the default limit would never apply to any route with a path parameter.
+    key_style="endpoint",
 )
 
 
@@ -32,7 +36,8 @@ async def enforce_default_limit(request: Request) -> None:
 
     The rules are the middleware's: a route with its own ``@limiter.limit`` keeps only that
     limit, ``@limiter.exempt`` routes are skipped, and ``RATE_LIMIT_ENABLED=false`` turns it off.
-    The count is per client address and per URL path (slowapi's ``default_limits``).
+    The count is per client address and per route template (``key_style="endpoint"``): every
+    ``/keys/<id>`` shares one budget however many different ids are asked for.
     """
     if not limiter.enabled:
         return

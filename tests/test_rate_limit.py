@@ -9,9 +9,15 @@ Installing the stock middleware is not enough either. It finds the endpoint by i
 flattened into that list, so it skips every one of them. ``create_app`` therefore applies the
 limit as an application-wide dependency (``app.api.rate_limit.enforce_default_limit``). The
 tests use ``/api/v1/auth/me``, a route that comes from an included router.
+
+The budget is per client address and per route, not per literal URL: slowapi's default
+``key_style="url"`` gave ``GET /keys/<id>`` a fresh budget for every id, so no route with a path
+parameter was ever limited.
 """
 
 from __future__ import annotations
+
+import uuid
 
 from httpx import ASGITransport, AsyncClient
 
@@ -77,3 +83,15 @@ async def test_the_app_served_in_production_applies_the_limit_too(rate_limiting,
     async with from_address(create_asgi_app(), "203.0.113.10") as http:
         codes = await statuses(http, UNDECORATED_ROUTE, limit + 2)
     assert codes == [401] * limit + [429] * 2
+
+
+async def test_every_id_of_a_route_with_a_path_parameter_shares_one_budget(rate_limiting):
+    """130 requests for 130 different ids used to be 130 budgets of one request each."""
+    limit = default_limit()
+    async with from_address(create_app(), "203.0.113.10") as http:
+        codes = [
+            (await http.get(f"/api/v1/keys/{uuid.uuid4()}")).status_code for _ in range(limit + 3)
+        ]
+        other_route = await http.get(UNDECORATED_ROUTE)
+    assert codes == [401] * limit + [429] * 3
+    assert other_route.status_code == 401  # a different route has a budget of its own
