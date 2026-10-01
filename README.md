@@ -8,6 +8,8 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen.svg)](#development--tests)
 
+> **Not affiliated with NVIDIA.** This is an independent open-source project: it is not affiliated with, endorsed by or sponsored by NVIDIA Corporation. "NVIDIA", "NVIDIA Build" and "NIM" are used only to say which service the software works with; product and company names belong to their respective owners.
+
 > **NVIDIA Terms of Service.** NVIDIA Build offers **no public API** to create or rotate keys programmatically (you generate them at [build.nvidia.com](https://build.nvidia.com/settings/api-keys)), and API keys **must not be shared or redistributed** to third parties. This project is therefore designed for **you to manage your _own_ keys on your _own_ instance**: the only outbound call is the official read-only **validation** endpoint `GET https://integrate.api.nvidia.com/v1/models`. It does not automate or scrape the NVIDIA portal, and it is **not** a service for handing your keys to other people.
 
 ## Deploy your own (no local setup)
@@ -19,18 +21,18 @@
    - the Dockerized web service with a health check,
    - the secrets `JWT_SECRET`, `ENCRYPTION_MASTER_KEY` and `MCP_OAUTH_JWT_SIGNING_KEY` (generated and stored by Render's secret manager),
    - `DATABASE_URL` injected from the database.
-2. When prompted, set `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD` (your initial admin, created on first boot).
+2. When prompted, set `FIRST_ADMIN_EMAIL` and `FIRST_ADMIN_PASSWORD` (your initial admin, created on first boot; required, because no HTTP request can create the first administrator).
 3. Open the service URL: log in at `/`, explore the API at `/docs`.
-4. Every push to `main` runs CI (lint + types + tests + build) and redeploys automatically. Migrations (`alembic upgrade head`) run on container start.
+4. Every push to `main` runs CI (lint + types + tests + build) and Render redeploys it automatically once all the checks pass (a failing commit is not deployed). Migrations (`alembic upgrade head`) run on container start.
 
 Prefer another host? Any platform that runs a Docker container + PostgreSQL works — see [`docs/deployment.md`](docs/deployment.md).
 
 ## Use it from Claude (MCP connector)
 
-The same deployment exposes a **Model Context Protocol server** at `‹BASE›/mcp` so you can add it to **Claude as a custom connector**. Claude authenticates with **OAuth 2.1** (GitHub by default, Google optional) and can list/inspect keys, **dispense** a ready-to-use key, register/rotate/revoke and manage projects — with the same RBAC and audit trail as the REST API. Only identities in `MCP_ALLOWED_IDENTITIES` may connect (fail-closed).
+The same deployment exposes a **Model Context Protocol server** at `‹BASE›/mcp` so you can add it to **Claude as a custom connector**. Claude authenticates with **OAuth 2.1** (GitHub by default, Google optional) and can list/inspect keys, **dispense** a ready-to-use key, register/rotate/revoke and manage projects — with the same RBAC and audit trail as the REST API. Only identities in `MCP_ALLOWED_IDENTITIES` may connect (fail-closed). The connector is optional: until you set the OAuth credentials below, `/mcp` stays off and everything else runs normally.
 
 1. Create a GitHub **OAuth App** with callback `‹BASE›/auth/callback`; copy the Client ID/Secret.
-2. In Render set `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` and `MCP_ALLOWED_IDENTITIES` (your GitHub login/e-mail). The rest is already in `render.yaml`.
+2. In Render set `MCP_GITHUB_CLIENT_ID`, `MCP_GITHUB_CLIENT_SECRET` and `MCP_ALLOWED_IDENTITIES` (your numeric GitHub user id and/or e-mail, not your login: `curl -s https://api.github.com/users/YOUR-LOGIN | jq .id`; users the connector creates are viewers unless you set `MCP_DEFAULT_ROLE`). The rest is already in `render.yaml`.
 3. In Claude: **Settings → Connectors → Add custom connector** → URL `‹BASE›/mcp` → **Connect**.
 
 Full guide (Google, tool reference, security, troubleshooting): [`docs/connector.md`](docs/connector.md).
@@ -46,7 +48,7 @@ Full guide (Google, tool reference, security, troubleshooting): [`docs/connector
 - **Statistics** — inventory by status, dispenses, usage time series.
 - **Security** — JWT (access + refresh), roles `admin`/`manager`/`viewer`, rate limiting, immutable audit of every sensitive operation.
 - **Claude connector (MCP)** — OAuth-secured MCP server at `/mcp` (see above).
-- **Operations** — structured JSON logging, Prometheus metrics at `/metrics`, health check at `/health`, OpenAPI at `/docs`.
+- **Operations** — structured JSON logging, Prometheus metrics at `/metrics` (behind an admin token or `METRICS_TOKEN`), health check at `/health`, OpenAPI at `/docs`.
 
 ## Architecture
 

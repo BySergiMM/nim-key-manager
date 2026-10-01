@@ -3,13 +3,14 @@
 from tests.conftest import ADMIN
 
 
-async def test_bootstrap_first_user_is_admin(client):
+async def test_the_first_registration_does_not_become_the_administrator(client):
+    """This used to assert the opposite (201 and ``admin``): on a fresh installation whoever
+    sent the first request to /register took it over. See tests/test_bootstrap.py."""
     response = await client.post(
         "/api/v1/auth/register",
         json={"email": "first@example.com", "password": "Password123!", "role": "viewer"},
     )
-    assert response.status_code == 201
-    assert response.json()["role"] == "admin"  # bootstrap overrides requested role
+    assert response.status_code == 403
 
 
 async def test_register_requires_admin_after_bootstrap(client, admin_headers):

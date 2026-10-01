@@ -35,22 +35,62 @@ class AuthService:
         actor: User | None,
         ip_address: str | None = None,
     ) -> User:
-        """Create a user.
+        """Create a user. Only an administrator may.
 
-        The very first user of the system self-registers and becomes ADMIN
-        (bootstrap). Afterwards only administrators may create users.
+        There is deliberately no "the first caller becomes the administrator" rule here: on a
+        fresh installation whoever reached ``POST /api/v1/auth/register`` first would take it
+        over. The first administrator comes from ``bootstrap_admin``, which only code running on
+        the host calls (never an HTTP request).
         """
-        is_bootstrap = await self._users.count() == 0
-        if not is_bootstrap and (actor is None or actor.role != Role.ADMIN.value):
+        if actor is None or actor.role != Role.ADMIN.value:
             raise PermissionDeniedError("only administrators can register new users")
+        return await self._create(
+            email=email,
+            password=password,
+            full_name=full_name,
+            role=role,
+            actor=actor,
+            ip_address=ip_address,
+        )
+
+    async def bootstrap_admin(
+        self, *, email: str, password: str, full_name: str | None = None
+    ) -> User:
+        """Create the very first user, as ADMIN, on an installation that has no users.
+
+        For trusted code that runs on the host: the ``FIRST_ADMIN_EMAIL`` /
+        ``FIRST_ADMIN_PASSWORD`` seeding at start-up and ``scripts/create_admin.py``. Nothing
+        reachable over HTTP may call it.
+        """
+        if await self._users.count() != 0:
+            raise ConflictError(
+                "the first administrator can only be created while there are no users"
+            )
+        return await self._create(
+            email=email,
+            password=password,
+            full_name=full_name,
+            role=Role.ADMIN,
+            actor=None,
+        )
+
+    async def _create(
+        self,
+        *,
+        email: str,
+        password: str,
+        full_name: str | None,
+        role: Role,
+        actor: User | None,
+        ip_address: str | None = None,
+    ) -> User:
         if await self._users.get_by_email(email) is not None:
             raise ConflictError("a user with this email already exists")
-        effective_role = Role.ADMIN if is_bootstrap else role
         user = User(
             email=email,
             hashed_password=hash_password(password),
             full_name=full_name,
-            role=effective_role.value,
+            role=role.value,
         )
         await self._users.add(user)
         await self._audit.record(
@@ -58,7 +98,7 @@ class AuthService:
             actor=actor or user,
             resource_type="user",
             resource_id=str(user.id),
-            detail={"email": email, "role": effective_role.value},
+            detail={"email": email, "role": role.value},
             ip_address=ip_address,
         )
         await self._session.commit()

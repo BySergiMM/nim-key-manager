@@ -10,8 +10,10 @@ async def test_health(client):
     assert body["version"]
 
 
-async def test_metrics_exposed(client):
-    response = await client.get("/metrics")
+async def test_metrics_exposed(client, admin_headers):
+    """Anonymous access used to be allowed (200); it now needs an admin or METRICS_TOKEN."""
+    assert (await client.get("/metrics")).status_code == 401
+    response = await client.get("/metrics", headers=admin_headers)
     assert response.status_code == 200
 
 

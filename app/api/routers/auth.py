@@ -24,7 +24,11 @@ async def register(
     session: AsyncSession = Depends(get_session),
     actor: User | None = Depends(get_optional_user),
 ) -> User:
-    """Bootstrap: the first user self-registers as admin; afterwards admin-only."""
+    """Create a user (admin only).
+
+    Nobody can become the first administrator through this endpoint: that one comes from
+    FIRST_ADMIN_EMAIL / FIRST_ADMIN_PASSWORD (see docs/deployment.md#first-administrator).
+    """
     return await AuthService(session).register(
         email=body.email,
         password=body.password,

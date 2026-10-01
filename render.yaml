@@ -1,5 +1,5 @@
 # Render Blueprint: provisions the managed Postgres database, the web service,
-# and all secrets automatically. Deploys on every push to main.
+# and all secrets automatically. A push to main is deployed only after its CI checks pass.
 # Docs: https://render.com/docs/blueprint-spec
 databases:
   - name: nim-key-manager-db
@@ -13,18 +13,26 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
-    autoDeployTrigger: commit
+    # checksPass: Render deploys a commit only after all of its GitHub checks pass, and not at all
+    # when one fails or none is found (https://render.com/docs/blueprint-spec,
+    # https://render.com/docs/deploys#integrating-with-ci). "commit" deployed every push at once,
+    # CI result or not. If you use the deploy hook of .github/workflows/deploy.yml instead,
+    # set this to "off" so the hook is the only trigger.
+    autoDeployTrigger: checksPass
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: nim-key-manager-db
           property: connectionString
+      # generateValue: Render sets "a randomized, base64-encoded, 256-bit value" (44 characters,
+      # https://render.com/docs/blueprint-spec). The app refuses to start in production with a
+      # secret that is empty, a placeholder or shorter than 32 characters; these satisfy that.
       - key: JWT_SECRET
         generateValue: true            # secret manager: generated & stored by Render
       - key: ENCRYPTION_MASTER_KEY
         generateValue: true            # secret manager: generated & stored by Render
       - key: FIRST_ADMIN_EMAIL
-        sync: false                    # prompted once in the Render dashboard
+        sync: false                    # prompted once in the Render dashboard; required: the only way to get the first admin
       - key: FIRST_ADMIN_PASSWORD
         sync: false                    # prompted once in the Render dashboard
       - key: ENVIRONMENT
@@ -37,8 +45,17 @@ services:
         value: "true"
       - key: RATE_LIMIT_ENABLED
         value: "true"
+      # uvicorn believes X-Forwarded-For only from these peers and then takes the right-most
+      # address that is NOT in this list, so a client cannot pick its own IP (rate limits,
+      # audit log). Never "*". Render does not publish its proxy address ranges; these are
+      # the private (RFC 1918) ranges the proxy reaches the container from (an inference).
+      # Read docs/deployment.md#client-ip-and-proxy-headers before changing it.
+      - key: FORWARDED_ALLOW_IPS
+        value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       # --- Claude MCP connector (OAuth 2.1) ---------------------------------
       # PUBLIC_BASE_URL is taken automatically from RENDER_EXTERNAL_URL.
+      # The connector is optional: until the three sync:false variables below are filled in,
+      # the service starts normally and /mcp stays off (see docs/connector.md).
       - key: MCP_ENABLED
         value: "true"
       - key: MCP_AUTH_ENABLED
@@ -52,4 +69,4 @@ services:
       - key: MCP_GITHUB_CLIENT_SECRET
         sync: false                    # from your GitHub OAuth App
       - key: MCP_ALLOWED_IDENTITIES
-        sync: false                    # your GitHub login and/or e-mail (comma-separated)
+        sync: false                    # your NUMERIC GitHub user id and/or e-mail (comma-separated); not a login

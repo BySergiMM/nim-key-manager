@@ -29,11 +29,13 @@ import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 from app.api.deps import get_key_validator  # noqa: E402
+from app.api.rate_limit import limiter  # noqa: E402
 from app.application.interfaces import KeyValidationOutcome  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 from app.domain.enums import KeyCheckResult  # noqa: E402
 from app.infrastructure.db.models import Base  # noqa: E402
 from app.infrastructure.db.session import engine  # noqa: E402
-from app.main import create_app  # noqa: E402
+from app.main import _seed_first_admin, create_app  # noqa: E402
 
 ADMIN = {"email": "admin@example.com", "password": "SuperSecret123", "full_name": "Admin"}
 
@@ -49,6 +51,17 @@ class FakeValidator:
         self.calls += 1
         status_code = {KeyCheckResult.VALID: 200, KeyCheckResult.INVALID: 401}.get(self.result)
         return KeyValidationOutcome(result=self.result, status_code=status_code)
+
+
+class RecordingLogger:
+    """Stands in for a module's structlog ``logger`` (``cache_logger_on_first_use`` makes
+    ``structlog.testing.capture_logs`` unreliable) and keeps ``(level, event, fields)``."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict]] = []
+
+    def __getattr__(self, level: str):
+        return lambda event, **fields: self.events.append((level, event, fields))
 
 
 def sample_key(prefix: str = "nvapi-test-") -> str:
@@ -73,9 +86,26 @@ async def client(fake_validator: FakeValidator):
 
 
 @pytest.fixture
-async def admin_headers(client: AsyncClient) -> dict[str, str]:
-    response = await client.post("/api/v1/auth/register", json=ADMIN)
-    assert response.status_code == 201, response.text
+def rate_limiting(client: AsyncClient):
+    """Turn the rate limiter on (the test environment disables it) with clean counters."""
+    previous = limiter.enabled
+    limiter.enabled = True
+    limiter.reset()
+    yield
+    limiter.enabled = previous
+    limiter.reset()
+
+
+@pytest.fixture
+async def admin_headers(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, str]:
+    # The first administrator exists the way it does in production: seeded from
+    # FIRST_ADMIN_EMAIL / FIRST_ADMIN_PASSWORD at start-up. No HTTP request can create it.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "first_admin_email", ADMIN["email"])
+    monkeypatch.setattr(settings, "first_admin_password", ADMIN["password"])
+    await _seed_first_admin()
     response = await client.post(
         "/api/v1/auth/login",
         json={"email": ADMIN["email"], "password": ADMIN["password"]},

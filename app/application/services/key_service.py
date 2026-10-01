@@ -33,6 +33,10 @@ from app.infrastructure.db.repositories import (
 )
 
 NVAPI_PREFIX = "nvapi-"
+# The REST schemas accept 20 to 512 characters (KeyCreate, KeyRotate). The service enforces the
+# same range for every caller: the connector's tools take the key as a plain string.
+MIN_API_KEY_LENGTH = 20
+MAX_API_KEY_LENGTH = 512
 
 
 def is_expiring_soon(key: ApiKey, warning_days: int) -> bool:
@@ -264,9 +268,13 @@ class KeyService:
 
     @staticmethod
     def _ensure_format(api_key: str) -> None:
-        if not api_key.startswith(NVAPI_PREFIX) or len(api_key) < 20:
+        if not api_key.startswith(NVAPI_PREFIX) or not (
+            MIN_API_KEY_LENGTH <= len(api_key) <= MAX_API_KEY_LENGTH
+        ):
+            # Never echo the value: it is a secret.
             raise ValidationFailedError(
-                "API key must start with 'nvapi-' and have a plausible length"
+                f"API key must start with 'nvapi-' and be {MIN_API_KEY_LENGTH} to "
+                f"{MAX_API_KEY_LENGTH} characters long"
             )
 
     def _require_validator(self) -> KeyValidator:
